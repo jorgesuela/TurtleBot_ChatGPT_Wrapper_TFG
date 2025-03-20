@@ -12,39 +12,36 @@ RESET = "\033[0m"
 
 class ChatGPTProcessor:
     def __init__(self):
-        """
-        Inicializa el nodo de procesamiento de mensajes de voz con ChatGPT.
-        """
+        """Inicializa el nodo y configura OpenAI y ROS."""
         rospy.init_node('chatgpt_processor_node', anonymous=True)
-
-        # Obtener la API Key de openai
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            rospy.logerr("No se encontró la API Key de OpenAI. Asegúrate de definir la variable de entorno.")
-            raise RuntimeError("API Key de OpenAI no encontrada.")
-
-        # Configurar OpenAI
-        self.client = OpenAI(api_key=api_key)
-        self.model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")  # Se utiliza el modelo básico por temas de costos
-
-        # Suscripción al topic de voz, por el que recibira los mensajes del usuario
-        self.subscription = rospy.Subscriber('/speech_to_text', String, self.process_speech_input)
-
-        # Publicador de comandos JSON, que envia los resultados de la ia al nodo de control del robot
-        self.publisher = rospy.Publisher('/turtlebot_commands', String, queue_size=10)
-
+        self._setup_openai()
+        self._setup_ros()
         rospy.loginfo("Nodo ChatGPTProcessor iniciado. Esperando mensajes...")
 
-    def process_speech_input(self, msg):
-        """
-        Procesa el mensaje de voz del usuario con la ia y envía la respuesta al nodo de control del robot.
-        :param msg: Mensaje de voz del usuario.
-        """
+    def _setup_openai(self):
+        """Configura la API de OpenAI."""
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            rospy.logerr("No se encontró la API Key de OpenAI.")
+            raise RuntimeError("API Key de OpenAI no encontrada.")
+        self.client = OpenAI(api_key=api_key)
+        self.model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+
+    def _setup_ros(self):
+        """Configura la suscripción y publicación de ROS."""
+        self.subscription = rospy.Subscriber('/speech_to_text', String, self._process_speech_input)
+        self.publisher = rospy.Publisher('/turtlebot_single_action', String, queue_size=10)
+
+    def _process_speech_input(self, msg):
+        """Procesa el mensaje recibido, lo traduce y publica las acciones."""
         user_input = msg.data.strip().lower()
-
         rospy.loginfo(f"{YELLOW}Procesando mensaje: {user_input}{RESET}")
+        actions = self._get_actions_from_gpt(user_input)
+        if actions:
+            self._publish_actions(actions)
 
-        # Contexto para la IA + mensaje del usuario
+    def _get_actions_from_gpt(self, user_input):
+        """Envía la entrada a OpenAI y devuelve la lista de acciones."""
         prompt = (
             "Eres un asistente que traduce comandos en lenguaje natural en JSON para un TurtleBot. "
             "Devuelve siempre la respuesta en formato JSON válido. "
@@ -54,7 +51,7 @@ class ChatGPTProcessor:
             "{\"action\": \"turn\", \"angle\": 90}, "
             "{\"action\": \"move\", \"distance\": 1}, "
             "{\"action\": \"stop\"}]\n"
-            "Notas importantes: - izquierda es angulo negativo y derecha angulo positivo\n"
+            "Notas importantes: - izquierda es ángulo negativo y derecha ángulo positivo\n"
             f"Entrada: '{user_input}'"
         )
 
@@ -62,33 +59,27 @@ class ChatGPTProcessor:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.2  # Respuestas más predecibles
+                temperature=0.2
             )
-            json_response = response.choices[0].message.content
-
-            # Validar que la salida sea JSON válido
-            try:
-                parsed_json = json.loads(json_response)
-                if not isinstance(parsed_json, list):
-                    rospy.logerr("La respuesta de ChatGPT no es un array JSON válido.")
-                    return
-            except json.JSONDecodeError:
-                rospy.logerr("Error: ChatGPT devolvió una respuesta no válida.")
-                return
-
-            # Publicar comandos JSON
-            output_msg = String()
-            output_msg.data = json_response
-            self.publisher.publish(output_msg)
-            rospy.loginfo(f"{GREEN}Comando enviado al nodo de control del robot:{RESET} \n{json_response}")
-
-
-        except OpenAIError as e:
-            rospy.logerr(f"Error de OpenAI: {e}")
+            return json.loads(response.choices[0].message.content)
+        except (OpenAIError, json.JSONDecodeError) as e:
+            rospy.logerr(f"Error al obtener acciones de OpenAI: {e}")
+            return []
         except Exception as e:
             rospy.logerr(f"Error inesperado: {e}")
+            return []
+
+    def _publish_actions(self, actions):
+        """Publica cada acción individualmente con una pausa entre ellas."""
+        for action in actions:
+            output_msg = String()
+            output_msg.data = json.dumps(action)
+            self.publisher.publish(output_msg)
+            rospy.loginfo(f"{GREEN}Acción enviada:{RESET} \n{action}")
+            rospy.sleep(1)
 
     def spin(self):
+        """Mantiene el nodo en funcionamiento."""
         rospy.spin()
 
 if __name__ == "__main__":
