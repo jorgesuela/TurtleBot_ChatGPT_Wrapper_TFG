@@ -4,6 +4,7 @@ import rospy
 import json
 from std_msgs.msg import String
 from TurtleBotActions import TurtleBotActions
+from DatabaseHandler import DatabaseHandler
 
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -12,7 +13,14 @@ RESET = "\033[0m"
 class TurtleBotControlNode:
     def __init__(self):
         rospy.init_node('turtlebot_control_node', anonymous=True)
-        self.actions = TurtleBotActions()
+        
+        # Crear una instancia de DatabaseHandler en el hilo principal
+        self.db = DatabaseHandler('/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/places.db')
+        self.db.create_table()  # Asegúrate de que la tabla exista
+        
+        # Pasar el objeto de base de datos a TurtleBotActions
+        self.actions = TurtleBotActions(self.db)
+        
         self.subscription = rospy.Subscriber('/turtlebot_single_action', String, self.execute_command)
         rospy.loginfo("Nodo de control del TurtleBot iniciado. Esperando comandos...")
 
@@ -30,7 +38,9 @@ class TurtleBotControlNode:
             action_map = {
                 "move": lambda cmd: self.actions.move(cmd.get("distance", 0)),
                 "turn": lambda cmd: self.actions.turn(cmd.get("angle", 0)),
-                "stop": lambda cmd: self.actions.stop()
+                "stop": lambda cmd: self.actions.stop(),
+                "go_to_place": lambda cmd: self.actions.go_to_place(cmd.get("place")),
+                "add_place": lambda cmd: self.actions.add_place(cmd)
             }
             action_type = command.get("action")
             if action_type in action_map:
@@ -40,9 +50,6 @@ class TurtleBotControlNode:
         except Exception as e:
             rospy.logerr(f"Error al procesar la acción: {e}")
 
-    def spin(self):
-        rospy.spin()
-
 if __name__ == "__main__":
     control = TurtleBotControlNode()
-    control.spin()
+    rospy.spin()

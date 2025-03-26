@@ -34,7 +34,7 @@ class ChatGPTProcessor:
     def _setup_ros(self):
         """Configura la suscripción y publicación de ROS."""
         self.subscription = rospy.Subscriber('/speech_to_text', String, self._process_speech_input)
-        self.publisher = rospy.Publisher('/turtlebot_single_action', String, queue_size=10)
+        self.publisher = rospy.Publisher('/turtlebot_single_action', String, queue_size=30)
 
     def _process_speech_input(self, msg):
         """Procesa el mensaje recibido, lo traduce y publica las acciones."""
@@ -54,11 +54,14 @@ class ChatGPTProcessor:
             "[{\"action\": \"move\", \"distance\": 2}, "
             "{\"action\": \"turn\", \"angle\": 90}, "
             "{\"action\": \"move\", \"distance\": 1}, "
-            "{\"action\": \"stop\"}]\n"
+            "{\"action\": \"stop\"}, "
+            "{\"action\": \"add_place\", \"name\": \"cocina\"}, "
+            "{\"action\": \"go_to_place\", \"place\": \"cocina\"}]\n"
             "Notas importantes: - izquierda es ángulo negativo y derecha ángulo positivo\n"
+            "                - El comando 'add_place' requiere el parámetro 'name' todo en minusculas y sin acentos.\n"
+            "                - El comando 'go_to_place' requiere el parámetro 'place', que es el nombre de un lugar, todo en minusculas y sin acentos.\n"
             f"Entrada: '{user_input}'"
         )
-
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
