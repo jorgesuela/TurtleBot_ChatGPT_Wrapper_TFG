@@ -16,7 +16,11 @@ resultantes hacia el nodo controller a traves del topic /turtlebot_single_action
 
 class ChatGPTProcessor:
     def __init__(self):
-        """Inicializa el nodo y configura OpenAI y ROS."""
+        """
+            Topics:
+            subscribe: /speech_to_text
+            publish: /turtlebot_single_action
+            """
         rospy.init_node('chatgpt_processor_node', anonymous=True)
         self._setup_openai()
         self._setup_ros()
@@ -52,12 +56,15 @@ class ChatGPTProcessor:
             "Si no hay ninguna acción, responde con un array vacío []. "
             "Ejemplo de salida esperada:\n"
             "[{\"action\": \"move\", \"distance\": 2}, "
+            "{\"action\": \"move\", \"distance\": 2, \"velocity\": 1}, "
             "{\"action\": \"turn\", \"angle\": 90}, "
             "{\"action\": \"move\", \"distance\": 1}, "
+            "{\"action\": \"explore\"}, "
             "{\"action\": \"stop\"}, "
             "{\"action\": \"add_place\", \"name\": \"cocina\"}, "
             "{\"action\": \"go_to_place\", \"place\": \"cocina\"}]\n"
             "Notas importantes: - izquierda es ángulo negativo y derecha ángulo positivo\n"
+            "                - La funcion move tiene un parametro velocidad, tu rango va desde muy lento 0.2 a muy rapido 1. si no te dicen nada, la vel por defecto es 0.5.\n"
             "                - El comando 'add_place' requiere el parámetro 'name' todo en minusculas y sin acentos.\n"
             "                - El comando 'go_to_place' requiere el parámetro 'place', que es el nombre de un lugar, todo en minusculas y sin acentos.\n"
             f"Entrada: '{user_input}'"
