@@ -41,7 +41,7 @@ class DatabaseHandler:
             conn = self.create_connection()
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT x, y, FROM places WHERE name=?
+                SELECT x, y FROM places WHERE name=?
             ''', (name,))
             result = cursor.fetchone()
             conn.close()

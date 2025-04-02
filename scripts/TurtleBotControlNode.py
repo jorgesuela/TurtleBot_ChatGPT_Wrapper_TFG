@@ -31,7 +31,9 @@ class TurtleBotControlNode:
 
     def execute_command(self, msg):
         try:
-            command = json.loads(msg.data)
+            command_list = json.loads(msg.data)
+            command = command_list[0] if isinstance(command_list, list) else command_list
+            
             rospy.loginfo(f"{YELLOW}Ejecutando acción: {command}{RESET}")
             self.process_single_action(command)
             rospy.loginfo(f"{GREEN}Acción ejecutada.{RESET}")
@@ -59,3 +61,4 @@ class TurtleBotControlNode:
 if __name__ == "__main__":
     control = TurtleBotControlNode()
     rospy.spin()
+

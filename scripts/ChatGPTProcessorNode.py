@@ -64,9 +64,12 @@ class ChatGPTProcessor:
             "{\"action\": \"add_place\", \"name\": \"cocina\"}, "
             "{\"action\": \"go_to_place\", \"place\": \"cocina\"}]\n"
             "Notas importantes: - izquierda es ángulo negativo y derecha ángulo positivo\n"
+            "                - El formato de salida debe ser un array siempre.\n"
             "                - La funcion move tiene un parametro velocidad, tu rango va desde muy lento 0.2 a muy rapido 1. si no te dicen nada, la vel por defecto es 0.5.\n"
             "                - El comando 'add_place' requiere el parámetro 'name' todo en minusculas y sin acentos.\n"
+            "                - frases como 'esto es el salon' o 'guarda este sitio como el salon', significan que hagas un add_place.\n"
             "                - El comando 'go_to_place' requiere el parámetro 'place', que es el nombre de un lugar, todo en minusculas y sin acentos.\n"
+            "                - si se te pide que vayas a algun lugar, tan solo ejecuta la accion go_to_place, no hagas el add_place primero.\n"
             f"Entrada: '{user_input}'"
         )
         try:
@@ -75,6 +78,7 @@ class ChatGPTProcessor:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2
             )
+            rospy.loginfo(f"Respuesta GPT sin procesar: {response.choices[0].message.content}")
             return json.loads(response.choices[0].message.content)
         except (OpenAIError, json.JSONDecodeError) as e:
             rospy.logerr(f"Error al obtener acciones de OpenAI: {e}")

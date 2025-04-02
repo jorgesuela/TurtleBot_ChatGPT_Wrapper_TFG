@@ -5,7 +5,9 @@ import math
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-from move_base_msgs.msg import MoveBaseGoal
+import actionlib
+from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
+from tf.transformations import quaternion_from_euler
 
 class TurtleBotActions:
     
@@ -14,11 +16,21 @@ class TurtleBotActions:
         Topics:
         subscribe: /scan, /odom
         publish: /cmd_vel
+        param db: Base de datos para almacenar lugares.
         """
         self.db = db
         self.publisher = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
         self.current_pose = None
+
+        # para saber las distancias mínimas en cada dirección
         self.min_distance = float('inf')
+        self.min_distance_front = float('inf')
+        self.min_distance_left = float('inf')
+        self.min_distance_right= float('inf')
+
+        # Cliente de acción para la navegación
+        self.client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
+        self.client.wait_for_server()
         
         # Suscripciones
         rospy.Subscriber("/scan", LaserScan, self.laser_callback)
@@ -31,9 +43,11 @@ class TurtleBotActions:
         self.current_pose = msg.pose.pose
 
     def laser_callback(self, msg):
-        """Actualiza la distancia mínima detectada por el LiDAR."""
-        self.min_distance = min(msg.ranges)
-        
+        """Detecta obstáculos en diferentes direcciones."""
+        self.min_distance_front = min(min(msg.ranges[:30] + msg.ranges[-30:]), 3.0)  # Frontal
+        self.min_distance_left = min(min(msg.ranges[60:120]), 3.0)  # Izquierda
+        self.min_distance_right = min(min(msg.ranges[-120:-60]), 3.0)  # Derecha
+
     def move(self, distance, velocity):
         """
         Mueve el robot en línea recta una distancia específica a una velocidad dada.
@@ -44,7 +58,6 @@ class TurtleBotActions:
         twist.linear.x = velocity if distance > 0 else -velocity  # Ajustar dirección con el signo de la distancia
         duration = abs(distance) / velocity  # Calcular tiempo de movimiento
         
-        rospy.loginfo(f"Moviendo {'adelante' if distance > 0 else 'atrás'} {abs(distance)} metros a {velocity} m/s.")
         self.execute_action(twist, duration)
 
     def turn(self, angle):
@@ -59,9 +72,26 @@ class TurtleBotActions:
         duration = angle_rad / angular_speed  # Tiempo necesario para girar
 
         twist.angular.z = angular_speed if angle < 0 else -angular_speed  
-        rospy.loginfo(f"Girando {'izquierda' if angle < 0 else 'derecha'} {abs(angle)} grados en {duration:.2f} segundos.")
-
+    
         self.execute_action(twist, duration)
+
+    def obstacle_avoidance(self):
+        """
+        Evita obstáculos utilizando la información del láser.
+        Si se detecta un obstáculo, el robot retrocede y gira en la dirección opuesta al obstáculo.
+        """
+        if self.min_distance_front < 0.35:
+                self.move(-0.1, 0.2)  # Retrocede ligeramente
+                if self.min_distance_left < self.min_distance_right:
+                    self.turn(45)
+                else:
+                    self.turn(-45)
+        else:
+            self.move(0.1, 0.2)  # Avanza en línea recta con velocidad optimizada
+
+    def stop(self):
+        twist = Twist()
+        self.publisher.publish(twist)
 
     def add_place(self, command):
         """
@@ -70,7 +100,6 @@ class TurtleBotActions:
         """
         # Este tiempo es para asegurar que el robot ya no está moviéndose antes de guardar la ubicación
         rospy.sleep(2)
-
         name = command.get("name")
         
         # Si la pose actual no está disponible, no podemos añadir el lugar
@@ -78,13 +107,11 @@ class TurtleBotActions:
             rospy.logwarn("No se pudo obtener las coordenadas del robot. Asegúrate de que el robot esté publicando odometría.")
             return
 
-        # Usar las coordenadas actuales del robot
         x = round(self.current_pose.position.x, 2)
         y = round(self.current_pose.position.y, 2)
         
         if name:
             try:
-                # Usar el objeto db para interactuar con la base de datos
                 self.db.insert_place(name, x, y)
                 rospy.loginfo(f"Nuevo lugar añadido: {name} en las coordenadas ({x}, {y}).")
             except Exception as e:
@@ -93,56 +120,57 @@ class TurtleBotActions:
             rospy.logwarn("Faltan parámetros para añadir el lugar. Asegúrate de incluir nombre.")
 
     def go_to_place(self, place_name):
+        """
+        Navega a un lugar específico utilizando la base de datos.
+        :param place_name: Nombre del lugar al que se desea ir.
+        """
+        # Obtener las coordenadas del lugar desde la base de datos
         place = self.db.get_place(place_name)
-        if place:
-            x, y = place
-            rospy.loginfo(f"Moviendo al lugar: {place_name} en las coordenadas {x}, {y}.")
-            
-            # Crear un mensaje de acción para mover el robot hacia las coordenadas
-            goal = MoveBaseGoal()
-            goal.target_pose.header.frame_id = "map"  # Usar el sistema de coordenadas 'map'
-            goal.target_pose.header.stamp = rospy.Time.now()
-
-            goal.target_pose.pose.position.x = x
-            goal.target_pose.pose.position.y = y
-            goal.target_pose.pose.orientation.w = 1.0  # Orientación neutral (sin giro)
-
-            # Enviar la meta a move_base
-            self.client.send_goal(goal)
-            self.client.wait_for_result()
-
-            # Obtener el resultado de la acción
-            result = self.client.get_result()
-            if result:
-                rospy.loginfo(f"Robot ha llegado al lugar {place_name}.")
-            else:
-                rospy.logwarn(f"El robot no ha llegado al lugar {place_name}.")
-        else:
+        if place is None:
             rospy.logwarn(f"Lugar '{place_name}' no encontrado en la base de datos.")
+            return
+        
+        # Acceder correctamente a las coordenadas, ya que 'place' es una tupla (x, y)
+        x = place[0]
+        y = place[1]
+        
+        goal = MoveBaseGoal()
+        goal.target_pose.header.frame_id = "map"  # Asegúrate de que el marco de referencia es el adecuado
+        goal.target_pose.header.stamp = rospy.Time.now()
 
-    def explore_environment(self, exploration_time=90):
+        # Establece la posición y orientación del objetivo
+        goal.target_pose.pose.position.x = x
+        goal.target_pose.pose.position.y = y
+        quaternion = quaternion_from_euler(0, 0, 0)  # Suponiendo que la orientación es cero, puedes cambiarla si lo necesitas
+        goal.target_pose.pose.orientation.x = quaternion[0]
+        goal.target_pose.pose.orientation.y = quaternion[1]
+        goal.target_pose.pose.orientation.z = quaternion[2]
+        goal.target_pose.pose.orientation.w = quaternion[3]
+
+        rospy.loginfo(f"Enviando al robot hacia {place_name} ({x}, {y})...")
+        self.client.send_goal(goal)
+        self.client.wait_for_result()
+        
+        if self.client.get_state() == actionlib.GoalStatus.SUCCEEDED:
+            rospy.loginfo("Robot ha llegado a su destino.")
+        else:
+            rospy.logwarn("No se pudo llegar al destino.")
+
+        
+    def explore_environment(self, exploration_time=300):
         """
-        Explora el entorno evitando obstáculos.
-        :param exploration_time: Tiempo total de exploración en segundos.
+        Inicia la exploración del entorno durante un tiempo específico utilizando SLAM.
+        :param exploration_time: Tiempo en segundos para explorar.
         """
+        rospy.loginfo(f"Iniciando exploración durante {exploration_time} segundos.")
+        
+        # Movimiento continuo para explorar, evitando obstáculos
         start_time = rospy.Time.now().to_sec()
-        rospy.loginfo("Iniciando exploración del entorno.")
+        while rospy.Time.now().to_sec() - start_time < exploration_time:
+            self.obstacle_avoidance()
 
-        while (rospy.Time.now().to_sec() - start_time) < exploration_time:
-            if self.min_distance < 0.5:  # Si hay un obstáculo a menos de 0.5m
-                rospy.loginfo("Obstáculo detectado a " + str(self.min_distance) + " girando...")
-                self.turn(90)  # Girar 90 grados
-            else:
-                self.move(1, 0.2)  # Moverse 1 metro a 0.2 m/s
-            rospy.sleep(1)
-
-        rospy.loginfo("Exploración finalizada.")
-        self.stop()
-
-    def stop(self):
-        twist = Twist()
-        rospy.loginfo("Deteniendo el robot.")
-        self.publisher.publish(twist)
+        rospy.loginfo("Exploración completada.")
+    
 
     def execute_action(self, twist, duration):
         rate = rospy.Rate(10)  # 10 Hz
@@ -153,4 +181,4 @@ class TurtleBotActions:
             rate.sleep()
 
         self.stop()  # Detener el robot después del tiempo especificado
-        rospy.sleep(1) # Para evitar que se mueva mientras hace otras acciones
+        #rospy.sleep(1) # Para evitar que se mueva mientras hace otras acciones
