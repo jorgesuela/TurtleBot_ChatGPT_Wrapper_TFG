@@ -1,5 +1,8 @@
 # TurtleBot_ChatGPT_Wrapper_TFG
 
+![diagrama tfg](https://github.com/user-attachments/assets/b2677dba-b516-4870-babe-6c5845866fc3)
+
+
 # 🚀 Módulo de Control del Robot con ChatGPT y Telegram
 
 Este módulo permite controlar un robot mediante comandos de voz enviados por Telegram, procesados por ChatGPT y ejecutados en un TurtleBot en **TurtleSim** o **Gazebo**.
