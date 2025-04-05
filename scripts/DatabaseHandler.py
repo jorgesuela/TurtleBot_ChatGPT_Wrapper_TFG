@@ -46,3 +46,12 @@ class DatabaseHandler:
             result = cursor.fetchone()
             conn.close()
             return result
+    
+    def get_all_places(self):
+        with self.lock:
+            conn = self.create_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT name FROM places')
+            places = cursor.fetchall()
+            conn.close()
+            return [place[0] for place in places]  # Devuelve una lista con los nombres de los lugares

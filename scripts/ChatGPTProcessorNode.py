@@ -5,6 +5,7 @@ import json
 import rospy
 from std_msgs.msg import String
 from openai import OpenAI, OpenAIError
+from DatabaseHandler import DatabaseHandler
 
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -24,6 +25,11 @@ class ChatGPTProcessor:
         rospy.init_node('chatgpt_processor_node', anonymous=True)
         self._setup_openai()
         self._setup_ros()
+
+        # Crear una instancia de DatabaseHandler en el hilo principal
+        self.db = DatabaseHandler('/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/places.db')
+        self.db.create_table()  # Asegúrate de que la tabla exista
+
         rospy.loginfo("Nodo ChatGPTProcessor iniciado. Esperando mensajes...")
 
     def _setup_openai(self):
@@ -43,13 +49,20 @@ class ChatGPTProcessor:
     def _process_speech_input(self, msg):
         """Procesa el mensaje recibido, lo traduce y publica las acciones."""
         user_input = msg.data.strip().lower()
+
+        # Obtener la lista de lugares de la base de datos
+        places = self.db.get_all_places()
+
         rospy.loginfo(f"{YELLOW}Procesando mensaje: {user_input}{RESET}")
-        actions = self._get_actions_from_gpt(user_input)
+        actions = self._get_actions_from_gpt(user_input, places)
         if actions:
             self._publish_actions(actions)
 
-    def _get_actions_from_gpt(self, user_input):
+    def _get_actions_from_gpt(self, user_input, places):
         """Envía la entrada a OpenAI y devuelve la lista de acciones."""
+        # Convertir la lista de lugares en un formato de texto para agregar al prompt
+        places_text = ", ".join(places)
+        
         prompt = (
             "Eres un asistente que traduce comandos en lenguaje natural en JSON para un TurtleBot. "
             "Devuelve siempre la respuesta en formato JSON válido. "
@@ -65,11 +78,12 @@ class ChatGPTProcessor:
             "{\"action\": \"go_to_place\", \"place\": \"cocina\"}]\n"
             "Notas importantes: - izquierda es ángulo negativo y derecha ángulo positivo\n"
             "                - El formato de salida debe ser un array siempre.\n"
-            "                - La funcion move tiene un parametro velocidad, tu rango va desde muy lento 0.2 a muy rapido 1. si no te dicen nada, la vel por defecto es 0.5.\n"
+            "                - La funcion move tiene un parametro velocidad, tu rango va desde muy lento 0.25 a muy rapido 0.75. si no te dicen nada, la vel por defecto es 0.5.\n"
             "                - El comando 'add_place' requiere el parámetro 'name' todo en minusculas y sin acentos.\n"
             "                - frases como 'esto es el salon' o 'guarda este sitio como el salon', significan que hagas un add_place.\n"
             "                - El comando 'go_to_place' requiere el parámetro 'place', que es el nombre de un lugar, todo en minusculas y sin acentos.\n"
-            "                - si se te pide que vayas a algun lugar, tan solo ejecuta la accion go_to_place, no hagas el add_place primero.\n"
+            "                - si se te pide que vayas a algun lugar(go_to_place), estos son los sitios a los que eres capaz de ir, debes ser capaz de intuir a donde quiere ir el usuario:\n"
+            f"Lugares disponibles: {places_text}\n"
             f"Entrada: '{user_input}'"
         )
         try:

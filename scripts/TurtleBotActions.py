@@ -155,9 +155,8 @@ class TurtleBotActions:
             rospy.loginfo("Robot ha llegado a su destino.")
         else:
             rospy.logwarn("No se pudo llegar al destino.")
-
-        
-    def explore_environment(self, exploration_time=300):
+       
+    def explore_environment(self, exploration_time=180):
         """
         Inicia la exploración del entorno durante un tiempo específico utilizando SLAM.
         :param exploration_time: Tiempo en segundos para explorar.
@@ -169,8 +168,7 @@ class TurtleBotActions:
         while rospy.Time.now().to_sec() - start_time < exploration_time:
             self.obstacle_avoidance()
 
-        rospy.loginfo("Exploración completada.")
-    
+        rospy.loginfo("Exploración completada.")  
 
     def execute_action(self, twist, duration):
         rate = rospy.Rate(10)  # 10 Hz
@@ -182,3 +180,11 @@ class TurtleBotActions:
 
         self.stop()  # Detener el robot después del tiempo especificado
         #rospy.sleep(1) # Para evitar que se mueva mientras hace otras acciones
+        
+# funciones utiles por implementar:
+
+# una funcion que guarde el mapa actual en la carpeta maps
+
+# una funcion que busque el mapa solicitado y lo cargue
+
+# estaria bien que el robot al explorar fuera directamente a zonas que no ha explorado
