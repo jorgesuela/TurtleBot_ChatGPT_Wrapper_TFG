@@ -48,7 +48,7 @@ class TurtleBotControlNode:
                 "stop": lambda cmd: self.actions.stop(),
                 "go_to_place": lambda cmd: self.actions.go_to_place(cmd.get("place")),
                 "add_place": lambda cmd: self.actions.add_place(cmd),
-                "explore": lambda cmd: self.actions.explore_environment()
+                "explore": lambda cmd: self.actions.explore_smart()
             }
             action_type = command.get("action")
             if action_type in action_map:

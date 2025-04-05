@@ -8,6 +8,8 @@ from sensor_msgs.msg import LaserScan
 import actionlib
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from tf.transformations import quaternion_from_euler
+from nav_msgs.msg import OccupancyGrid
+import heapq
 
 class TurtleBotActions:
     
@@ -21,6 +23,7 @@ class TurtleBotActions:
         self.db = db
         self.publisher = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
         self.current_pose = None
+        self.map_data = None
 
         # para saber las distancias mínimas en cada dirección
         self.min_distance = float('inf')
@@ -35,6 +38,7 @@ class TurtleBotActions:
         # Suscripciones
         rospy.Subscriber("/scan", LaserScan, self.laser_callback)
         rospy.Subscriber("/odom", Odometry, self.odom_callback)
+        rospy.Subscriber("/map", OccupancyGrid, self.map_callback)
 
         rospy.sleep(1)  # dar tiempo a la conexión con el topic de odometría
 
@@ -47,6 +51,9 @@ class TurtleBotActions:
         self.min_distance_front = min(min(msg.ranges[:30] + msg.ranges[-30:]), 3.0)  # Frontal
         self.min_distance_left = min(min(msg.ranges[60:120]), 3.0)  # Izquierda
         self.min_distance_right = min(min(msg.ranges[-120:-60]), 3.0)  # Derecha
+
+    def map_callback(self, msg):
+        self.map_data = msg
 
     def move(self, distance, velocity):
         """
@@ -181,10 +188,107 @@ class TurtleBotActions:
         self.stop()  # Detener el robot después del tiempo especificado
         #rospy.sleep(1) # Para evitar que se mueva mientras hace otras acciones
         
-# funciones utiles por implementar:
+    def find_frontiers(self, max_frontiers=5):
+        frontiers = []
+        if self.map_data is None:
+            return frontiers
 
-# una funcion que guarde el mapa actual en la carpeta maps
+        width = self.map_data.info.width
+        height = self.map_data.info.height
+        resolution = self.map_data.info.resolution
+        origin = self.map_data.info.origin.position
+        data = self.map_data.data
 
-# una funcion que busque el mapa solicitado y lo cargue
+        def is_valid(x, y):
+            return 0 <= x < width and 0 <= y < height
 
-# estaria bien que el robot al explorar fuera directamente a zonas que no ha explorado
+        processed_cells = set()
+
+        for y in range(1, height - 1):
+            for x in range(1, width - 1):
+                idx = x + y * width
+                if data[idx] == 0 and idx not in processed_cells:
+                    unknown_count = 0
+                    for dx in [-1, 0, 1]:
+                        for dy in [-1, 0, 1]:
+                            nx, ny = x + dx, y + dy
+                            n_idx = nx + ny * width
+                            if is_valid(nx, ny) and data[n_idx] == -1:
+                                unknown_count += 1
+                    if unknown_count >= 4:  # Frontera válida
+                        wx = origin.x + x * resolution
+                        wy = origin.y + y * resolution
+                        frontiers.append((wx, wy))
+                        processed_cells.add(idx)
+
+        # Limitar a un número máximo de fronteras para procesar
+        # Ordenar por distancia euclediana a la posición actual
+        frontiers = sorted(frontiers, key=lambda p: math.hypot(p[0] - self.current_pose.position.x, p[1] - self.current_pose.position.y))
+        return frontiers[:max_frontiers]
+
+    def explore_smart(self, exploration_time=60):
+        rospy.loginfo(f"Iniciando exploración inteligente durante {exploration_time} segundos...")
+        start_time = rospy.Time.now().to_sec()  # Tiempo de inicio en segundos
+
+        while not rospy.is_shutdown():
+            # Calcular el tiempo transcurrido
+            elapsed_time = rospy.Time.now().to_sec() - start_time
+            if elapsed_time >= exploration_time:
+                rospy.loginfo("Se ha alcanzado el tiempo máximo de exploración. Finalizando.")
+                break
+
+            # Buscar fronteras a explorar
+            frontiers = self.find_frontiers()
+            if not frontiers:
+                rospy.loginfo("No se encontraron más zonas desconocidas. Exploración finalizada.")
+                break
+
+            # Selección de la frontera más cercana y grande
+            if self.current_pose:
+                heap = []
+                for frontier in frontiers:
+                    dist = math.hypot(
+                        frontier[0] - self.current_pose.position.x,
+                        frontier[1] - self.current_pose.position.y
+                    )
+                    heapq.heappush(heap, (dist, frontier))
+
+                # Extraer la frontera más cercana
+                closest_frontier = heapq.heappop(heap)[1]
+                target = self.offset_target(*closest_frontier)
+                self.send_goal(*target)
+
+        rospy.loginfo("Exploración finalizada.")
+
+
+    def send_goal(self, x, y):
+        goal = MoveBaseGoal()
+        goal.target_pose.header.frame_id = "map"
+        goal.target_pose.header.stamp = rospy.Time.now()
+        goal.target_pose.pose.position.x = x
+        goal.target_pose.pose.position.y = y
+        quaternion = quaternion_from_euler(0, 0, 0)
+        goal.target_pose.pose.orientation.x = quaternion[0]
+        goal.target_pose.pose.orientation.y = quaternion[1]
+        goal.target_pose.pose.orientation.z = quaternion[2]
+        goal.target_pose.pose.orientation.w = quaternion[3]
+
+        self.client.send_goal(goal)
+        self.client.wait_for_result(timeout=rospy.Duration(30))  # esperar 30s máx
+
+        return self.client.get_state()
+
+    def offset_target(self, x, y, extra=1.0):
+        if self.current_pose is None:
+            return x, y
+
+        dx = x - self.current_pose.position.x
+        dy = y - self.current_pose.position.y
+        dist = math.hypot(dx, dy)
+        if dist == 0:
+            return x, y
+
+        nx = dx / dist
+        ny = dy / dist
+
+        return x + nx * extra, y + ny * extra
