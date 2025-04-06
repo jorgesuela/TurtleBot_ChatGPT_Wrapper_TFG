@@ -267,11 +267,12 @@ class TurtleBotActions:
         goal.target_pose.header.stamp = rospy.Time.now()
         goal.target_pose.pose.position.x = x
         goal.target_pose.pose.position.y = y
-        quaternion = quaternion_from_euler(0, 0, 0)
-        goal.target_pose.pose.orientation.x = quaternion[0]
-        goal.target_pose.pose.orientation.y = quaternion[1]
-        goal.target_pose.pose.orientation.z = quaternion[2]
-        goal.target_pose.pose.orientation.w = quaternion[3]
+        yaw = math.atan2(y - self.current_pose.position.y, x - self.current_pose.position.x)
+        q = quaternion_from_euler(0, 0, yaw)
+        goal.target_pose.pose.orientation.x = q[0]
+        goal.target_pose.pose.orientation.y = q[1]
+        goal.target_pose.pose.orientation.z = q[2]
+        goal.target_pose.pose.orientation.w = q[3]
 
         self.client.send_goal(goal)
         self.client.wait_for_result(timeout=rospy.Duration(30))  # esperar 30s máx
