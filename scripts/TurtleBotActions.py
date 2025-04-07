@@ -156,7 +156,8 @@ class TurtleBotActions:
       
     def find_frontiers(self, max_frontiers=5):
         """
-        Devuelve las 5 fronteras mas prometedoras para la exploracion inteligente
+        Devuelve las fronteras más prometedoras para la exploración inteligente.
+        Esta versión mejora la eficiencia de la selección de fronteras.
         """
         frontiers = []
         if self.map_data is None:
@@ -173,6 +174,7 @@ class TurtleBotActions:
 
         processed_cells = set()
 
+        # Evaluar celdas adyacentes para detectar fronteras
         for y in range(1, height - 1):
             for x in range(1, width - 1):
                 idx = x + y * width
@@ -187,27 +189,36 @@ class TurtleBotActions:
                     if unknown_count >= 4:  # Frontera válida
                         wx = origin.x + x * resolution
                         wy = origin.y + y * resolution
-                        frontiers.append((wx, wy))
-                        processed_cells.add(idx)
 
-        # Limitar a un número máximo de fronteras para procesar
-        # Ordenar por distancia euclediana a la posición actual
+                        # Comprobamos si está rodeada de obstáculos
+                        obstacle_neighbors = 0
+                        for dx in [-1, 0, 1]:
+                            for dy in [-1, 0, 1]:
+                                nx, ny = x + dx, y + dy
+                                n_idx = nx + ny * width
+                                if is_valid(nx, ny) and data[n_idx] == 100:  # Ocupado por un obstáculo
+                                    obstacle_neighbors += 1
+
+                        # Si está rodeada de obstáculos, la descartamos
+                        if obstacle_neighbors < 7:  # Si no tiene más de 5 vecinos ocupados, es válida
+                            frontiers.append((wx, wy))
+                            processed_cells.add(idx)
+
+        # Limitar a un número máximo de fronteras
         frontiers = sorted(frontiers, key=lambda p: math.hypot(p[0] - self.current_pose.position.x, p[1] - self.current_pose.position.y))
-        return frontiers[:max_frontiers]
-    # este metodo hay que modificarlo, tiene que ir por limite de fronteras en vez de limite de tiempo
-    # el tiempo no funciona porque el movebase bloquea el while y deja de contar el tiempo
-    def smart_exploration(self, exploration_time=60):
-        """
-        Explora de forma inteligente priorizando zonas inexploradas cercanas
-        """
-        rospy.loginfo(f"Iniciando exploración inteligente durante {exploration_time} segundos...")
-        start_time = rospy.Time.now().to_sec()  # Tiempo de inicio en segundos
 
+        return frontiers[:max_frontiers]
+
+    def smart_exploration(self, max_frontiers=15):
+        """
+        Explora de forma inteligente priorizando zonas inexploradas cercanas.
+        Utiliza heurísticas para seleccionar las fronteras de exploración más prometedoras.
+        """
+        rospy.loginfo(f"Iniciando exploración inteligente ...")
+        explored_Frontiers = 0
         while not rospy.is_shutdown():
-            # Calcular el tiempo transcurrido
-            elapsed_time = rospy.Time.now().to_sec() - start_time
-            if elapsed_time >= exploration_time:
-                rospy.loginfo("Se ha alcanzado el tiempo máximo de exploración. Finalizando.")
+            if explored_Frontiers >= max_frontiers:
+                rospy.loginfo("Limite de fronteras exploradas alcanzado. Finalizando.")
                 break
 
             # Buscar fronteras a explorar
@@ -216,23 +227,22 @@ class TurtleBotActions:
                 rospy.loginfo("No se encontraron más zonas desconocidas. Exploración finalizada.")
                 break
 
-            # Selección de la frontera más cercana y grande
+            # Evaluación de las fronteras según su proximidad y su área.
             if self.current_pose:
                 heap = []
                 for frontier in frontiers:
-                    dist = math.hypot(
-                        frontier[0] - self.current_pose.position.x,
-                        frontier[1] - self.current_pose.position.y
-                    )
+                    dist = math.hypot(frontier[0] - self.current_pose.position.x, frontier[1] - self.current_pose.position.y)
+                    # Aquí puedes agregar más criterios de evaluación (ej. área o "abrirse" en zona desconocida).
                     heapq.heappush(heap, (dist, frontier))
 
                 # Extraer la frontera más cercana
                 closest_frontier = heapq.heappop(heap)[1]
                 (x, y) = self.offset_target(*closest_frontier)
+                explored_Frontiers += 1
 
-                # esto es para calcular el giro inicial que debe hacer el robot (arctan)
+                # Calcular el giro inicial que debe hacer el robot
                 yaw = math.atan2(y - self.current_pose.position.y, x - self.current_pose.position.x)
-                
+
                 self.send_goal(x, y, yaw)
 
         rospy.loginfo("Exploración finalizada.")
