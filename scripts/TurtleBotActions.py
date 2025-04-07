@@ -16,7 +16,7 @@ class TurtleBotActions:
     def __init__(self, db):
         """
         Topics:
-        subscribe: /scan, /odom
+        subscribe: /scan, /odom, /map
         publish: /cmd_vel
         param db: Base de datos para almacenar lugares.
         """
@@ -53,6 +53,7 @@ class TurtleBotActions:
         self.min_distance_right = min(min(msg.ranges[-120:-60]), 3.0)  # Derecha
 
     def map_callback(self, msg):
+        "util para saber que partes del mapa estan exploradas y sin explorar"
         self.map_data = msg
 
     def move(self, distance, velocity):
@@ -87,14 +88,18 @@ class TurtleBotActions:
         Evita obstáculos utilizando la información del láser.
         Si se detecta un obstáculo, el robot retrocede y gira en la dirección opuesta al obstáculo.
         """
+        # Si hay obstaculo delante
         if self.min_distance_front < 0.35:
-                self.move(-0.1, 0.2)  # Retrocede ligeramente
+                # Retrocede ligeramente si se encuentra un obstaculo
+                self.move(-0.1, 0.2)
+                # Gira hacia la direccion con el obstaculo mas lejano
                 if self.min_distance_left < self.min_distance_right:
                     self.turn(45)
                 else:
                     self.turn(-45)
         else:
-            self.move(0.1, 0.2)  # Avanza en línea recta con velocidad optimizada
+            # Si no hay obstaculo delante
+            self.move(0.1, 0.2)
 
     def stop(self):
         twist = Twist()
@@ -140,55 +145,19 @@ class TurtleBotActions:
         # Acceder correctamente a las coordenadas, ya que 'place' es una tupla (x, y)
         x = place[0]
         y = place[1]
-        
-        goal = MoveBaseGoal()
-        goal.target_pose.header.frame_id = "map"  # Asegúrate de que el marco de referencia es el adecuado
-        goal.target_pose.header.stamp = rospy.Time.now()
-
-        # Establece la posición y orientación del objetivo
-        goal.target_pose.pose.position.x = x
-        goal.target_pose.pose.position.y = y
-        quaternion = quaternion_from_euler(0, 0, 0)  # Suponiendo que la orientación es cero, puedes cambiarla si lo necesitas
-        goal.target_pose.pose.orientation.x = quaternion[0]
-        goal.target_pose.pose.orientation.y = quaternion[1]
-        goal.target_pose.pose.orientation.z = quaternion[2]
-        goal.target_pose.pose.orientation.w = quaternion[3]
 
         rospy.loginfo(f"Enviando al robot hacia {place_name} ({x}, {y})...")
-        self.client.send_goal(goal)
-        self.client.wait_for_result()
+        self.send_goal(x, y, 0)
         
         if self.client.get_state() == actionlib.GoalStatus.SUCCEEDED:
             rospy.loginfo("Robot ha llegado a su destino.")
         else:
             rospy.logwarn("No se pudo llegar al destino.")
-       
-    def explore_environment(self, exploration_time=180):
-        """
-        Inicia la exploración del entorno durante un tiempo específico utilizando SLAM.
-        :param exploration_time: Tiempo en segundos para explorar.
-        """
-        rospy.loginfo(f"Iniciando exploración durante {exploration_time} segundos.")
-        
-        # Movimiento continuo para explorar, evitando obstáculos
-        start_time = rospy.Time.now().to_sec()
-        while rospy.Time.now().to_sec() - start_time < exploration_time:
-            self.obstacle_avoidance()
-
-        rospy.loginfo("Exploración completada.")  
-
-    def execute_action(self, twist, duration):
-        rate = rospy.Rate(10)  # 10 Hz
-        start_time = rospy.Time.now().to_sec()
-
-        while (rospy.Time.now().to_sec() - start_time) < duration:
-            self.publisher.publish(twist)
-            rate.sleep()
-
-        self.stop()  # Detener el robot después del tiempo especificado
-        #rospy.sleep(1) # Para evitar que se mueva mientras hace otras acciones
-        
+      
     def find_frontiers(self, max_frontiers=5):
+        """
+        Devuelve las 5 fronteras mas prometedoras para la exploracion inteligente
+        """
         frontiers = []
         if self.map_data is None:
             return frontiers
@@ -225,8 +194,12 @@ class TurtleBotActions:
         # Ordenar por distancia euclediana a la posición actual
         frontiers = sorted(frontiers, key=lambda p: math.hypot(p[0] - self.current_pose.position.x, p[1] - self.current_pose.position.y))
         return frontiers[:max_frontiers]
-
-    def explore_smart(self, exploration_time=60):
+    # este metodo hay que modificarlo, tiene que ir por limite de fronteras en vez de limite de tiempo
+    # el tiempo no funciona porque el movebase bloquea el while y deja de contar el tiempo
+    def smart_exploration(self, exploration_time=60):
+        """
+        Explora de forma inteligente priorizando zonas inexploradas cercanas
+        """
         rospy.loginfo(f"Iniciando exploración inteligente durante {exploration_time} segundos...")
         start_time = rospy.Time.now().to_sec()  # Tiempo de inicio en segundos
 
@@ -255,19 +228,22 @@ class TurtleBotActions:
 
                 # Extraer la frontera más cercana
                 closest_frontier = heapq.heappop(heap)[1]
-                target = self.offset_target(*closest_frontier)
-                self.send_goal(*target)
+                (x, y) = self.offset_target(*closest_frontier)
+
+                # esto es para calcular el giro inicial que debe hacer el robot (arctan)
+                yaw = math.atan2(y - self.current_pose.position.y, x - self.current_pose.position.x)
+                
+                self.send_goal(x, y, yaw)
 
         rospy.loginfo("Exploración finalizada.")
 
-
-    def send_goal(self, x, y):
+    def send_goal(self, x, y, yaw):
+        "Envia el robot a unas coordenadas especificas con un angulo inicial especifico"
         goal = MoveBaseGoal()
         goal.target_pose.header.frame_id = "map"
         goal.target_pose.header.stamp = rospy.Time.now()
         goal.target_pose.pose.position.x = x
         goal.target_pose.pose.position.y = y
-        yaw = math.atan2(y - self.current_pose.position.y, x - self.current_pose.position.x)
         q = quaternion_from_euler(0, 0, yaw)
         goal.target_pose.pose.orientation.x = q[0]
         goal.target_pose.pose.orientation.y = q[1]
@@ -280,6 +256,10 @@ class TurtleBotActions:
         return self.client.get_state()
 
     def offset_target(self, x, y, extra=1.0):
+        """
+        Una vez el robot navega a la frontera inexplorada mas cercana, usando este metodo
+        el robot se adentra "extra" metros en la zona inexplorada para obtener mas informacion para el mapa
+        """
         if self.current_pose is None:
             return x, y
 
@@ -293,3 +273,13 @@ class TurtleBotActions:
         ny = dy / dist
 
         return x + nx * extra, y + ny * extra
+    
+    def execute_action(self, twist, duration):
+        rate = rospy.Rate(10)  # 10 Hz
+        start_time = rospy.Time.now().to_sec()
+
+        while (rospy.Time.now().to_sec() - start_time) < duration:
+            self.publisher.publish(twist)
+            rate.sleep()
+
+        self.stop()  # Detener el robot después del tiempo especificado

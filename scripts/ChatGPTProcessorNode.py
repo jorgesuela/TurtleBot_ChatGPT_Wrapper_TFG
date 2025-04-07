@@ -46,18 +46,6 @@ class ChatGPTProcessor:
         self.subscription = rospy.Subscriber('/speech_to_text', String, self._process_speech_input)
         self.publisher = rospy.Publisher('/turtlebot_single_action', String, queue_size=30)
 
-    def _process_speech_input(self, msg):
-        """Procesa el mensaje recibido, lo traduce y publica las acciones."""
-        user_input = msg.data.strip().lower()
-
-        # Obtener la lista de lugares de la base de datos
-        places = self.db.get_all_places()
-
-        rospy.loginfo(f"{YELLOW}Procesando mensaje: {user_input}{RESET}")
-        actions = self._get_actions_from_gpt(user_input, places)
-        if actions:
-            self._publish_actions(actions)
-
     def _get_actions_from_gpt(self, user_input, places):
         """Envía la entrada a OpenAI y devuelve la lista de acciones."""
         # Convertir la lista de lugares en un formato de texto para agregar al prompt
@@ -69,7 +57,7 @@ class ChatGPTProcessor:
             "Si no hay ninguna acción, responde con un array vacío []. "
             "Ejemplo de salida esperada:\n"
             "[{\"action\": \"move\", \"distance\": 2}, "
-            "{\"action\": \"move\", \"distance\": 2, \"velocity\": 1}, "
+            "{\"action\": \"move\", \"distance\": 2, \"velocity\": 0.5}, "
             "{\"action\": \"turn\", \"angle\": 90}, "
             "{\"action\": \"move\", \"distance\": 1}, "
             "{\"action\": \"explore\"}, "
@@ -100,7 +88,7 @@ class ChatGPTProcessor:
         except Exception as e:
             rospy.logerr(f"Error inesperado: {e}")
             return []
-
+        
     def _publish_actions(self, actions):
         """Publica cada acción individualmente con una pausa entre ellas."""
         for action in actions:
@@ -109,6 +97,18 @@ class ChatGPTProcessor:
             self.publisher.publish(output_msg)
             rospy.loginfo(f"{GREEN}Acción enviada:{RESET} \n{action}")
             rospy.sleep(1)
+
+    def _process_speech_input(self, msg):
+        """Procesa el mensaje recibido, lo traduce y publica las acciones."""
+        user_input = msg.data.strip().lower()
+
+        # Obtener la lista de lugares de la base de datos(sirve de contexto para chatgpt)
+        places = self.db.get_all_places()
+
+        rospy.loginfo(f"{YELLOW}Procesando mensaje: {user_input}{RESET}")
+        actions = self._get_actions_from_gpt(user_input, places)
+        if actions:
+            self._publish_actions(actions)
 
     def spin(self):
         """Mantiene el nodo en funcionamiento."""

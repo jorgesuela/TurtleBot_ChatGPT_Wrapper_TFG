@@ -11,6 +11,7 @@ YELLOW = "\033[93m"
 RESET = "\033[0m"
 
 class TurtleBotControlNode:
+
     def __init__(self):
         """
             Topics:
@@ -42,13 +43,14 @@ class TurtleBotControlNode:
 
     def process_single_action(self, command):
         try:
+            # diccionario de acciones con su clave "nombre" y su valor "funcion asociada"
             action_map = {
                 "move": lambda cmd: self.actions.move(cmd.get("distance", 0), cmd.get("velocity", 0)),
                 "turn": lambda cmd: self.actions.turn(cmd.get("angle", 0)),
                 "stop": lambda cmd: self.actions.stop(),
                 "go_to_place": lambda cmd: self.actions.go_to_place(cmd.get("place")),
                 "add_place": lambda cmd: self.actions.add_place(cmd),
-                "explore": lambda cmd: self.actions.explore_smart()
+                "explore": lambda cmd: self.actions.smart_exploration()
             }
             action_type = command.get("action")
             if action_type in action_map:

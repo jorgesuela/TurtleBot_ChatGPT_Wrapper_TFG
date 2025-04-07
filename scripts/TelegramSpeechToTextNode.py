@@ -2,7 +2,6 @@
 
 import rospy
 import os
-import json
 import telebot
 import speech_recognition as sr
 from io import BytesIO

@@ -1,6 +1,9 @@
 import sqlite3
 import threading
 
+"IMPORTANTE: Tanto el nodo de chatgpt como el nodo de control del robot acceden a la base de datos."
+"Esta clase debe usar thread locks para no permitir accesos simultaneos"
+
 class DatabaseHandler:
     def __init__(self, db_path):
         self.db_path = db_path
