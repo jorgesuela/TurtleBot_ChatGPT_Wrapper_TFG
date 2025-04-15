@@ -4,7 +4,8 @@
 
 Este módulo permite controlar un robot mediante comandos de voz enviados por Telegram, procesados por ChatGPT y ejecutados en un TurtleBot en **TurtleSim** o **Gazebo**.
 
-![diagrama tfg](https://github.com/user-attachments/assets/b2677dba-b516-4870-babe-6c5845866fc3)
+![diagrama tfg](![diagrama tfg](https://github.com/user-attachments/assets/e7fc4391-5885-4637-ad0d-fea1261d75af))
+
 
 ## 📌 Configuración Inicial
 Se debe descargar el modelo de reconomiento de voz deseado. Para las simulaciones, se ha usado el modelo de precision maxima de vosk, el cual se puede descargar del siguiente enlace:
