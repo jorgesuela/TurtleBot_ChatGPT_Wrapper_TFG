@@ -4,10 +4,10 @@
 gnome-terminal -- bash -c "roscore; exec bash"
 
 # Esperar un poco para asegurar que roscore arranque
-sleep 3
+sleep 4
 
 # Iniciar nodo 1: TelegramSpeechToTextNode
-gnome-terminal -- bash -c "cd ~/catkin_ws/src/turtlebot_chatgpt_wrapper && rosrun turtlebot_chatgpt_wrapper TelegramSpeechToTextNode.py; exec bash"
+gnome-terminal -- bash -c "cd ~/catkin_ws/src/turtlebot_chatgpt_wrapper && rosrun turtlebot_chatgpt_wrapper SpeakLinkNode.py; exec bash"
 
 # Iniciar nodo 2: ChatGPTProcessorNode
 gnome-terminal -- bash -c "rosrun turtlebot_chatgpt_wrapper ChatGPTProcessorNode.py; exec bash"
@@ -18,7 +18,7 @@ gnome-terminal -- bash -c "rosrun turtlebot_chatgpt_wrapper TurtleBotControlNode
 # Iniciar Gazebo (Simulador)
 gnome-terminal -- bash -c "roslaunch turtlebot3_gazebo turtlebot3_casa.launch; exec bash"
 
-# Iniciar move_base para la navegación
+# Lanza move_base
 gnome-terminal -- bash -c "roslaunch turtlebot3_navigation move_base.launch; exec bash"
 
 # Iniciar gmapping (o cualquier otro sistema SLAM)
