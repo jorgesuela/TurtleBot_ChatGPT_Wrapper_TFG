@@ -10,6 +10,9 @@ from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from tf.transformations import quaternion_from_euler
 from nav_msgs.msg import OccupancyGrid
 import heapq
+from visualization_msgs.msg import Marker
+from std_msgs.msg import ColorRGBA
+from geometry_msgs.msg import Point  # Asegúrate de importar Point
 
 class TurtleBotActions:
     
@@ -22,6 +25,7 @@ class TurtleBotActions:
         """
         self.db = db
         self.publisher = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
+        self.marker_pub = rospy.Publisher('/visualization_marker', Marker, queue_size=10)  # Publisher de Markers
         self.current_pose = None
         self.map_data = None
 
@@ -55,6 +59,34 @@ class TurtleBotActions:
     def map_callback(self, msg):
         "util para saber que partes del mapa estan exploradas y sin explorar"
         self.map_data = msg
+
+    def publish_target_frontier(self, target_frontier):
+        """
+        Publica la frontera objetivo en RViz como un marcador específico.
+        :param target_frontier: Tupla (x, y) representando la frontera objetivo.
+        """
+        marker = Marker()
+        marker.header.frame_id = "map"
+        marker.header.stamp = rospy.Time.now()
+        marker.ns = "target_frontier"
+        marker.id = 1  # Usamos un ID diferente para diferenciar este marcador
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.scale.x = 0.2  # Tamaño del marcador
+        marker.scale.y = 0.2
+        marker.scale.z = 0.2
+        marker.color = ColorRGBA(0.0, 1.0, 0.0, 1.0)  # Color verde para la frontera objetivo
+        marker.lifetime = rospy.Duration(0)  # El marker no se elimina automáticamente
+
+        # Definir la posición del marcador
+        p = Point()
+        p.x = target_frontier[0]
+        p.y = target_frontier[1]
+        p.z = 0
+        marker.points.append(p)
+
+        # Publica el marcador
+        self.marker_pub.publish(marker)
 
     def move(self, distance, velocity):
         """
@@ -200,7 +232,7 @@ class TurtleBotActions:
                                     obstacle_neighbors += 1
 
                         # Si está rodeada de obstáculos, la descartamos
-                        if obstacle_neighbors < 7:  # Si no tiene más de 5 vecinos ocupados, es válida
+                        if obstacle_neighbors < 6:  # Si no tiene más de 6 vecinos ocupados, es válida
                             frontiers.append((wx, wy))
                             processed_cells.add(idx)
 
@@ -208,6 +240,17 @@ class TurtleBotActions:
         frontiers = sorted(frontiers, key=lambda p: math.hypot(p[0] - self.current_pose.position.x, p[1] - self.current_pose.position.y))
 
         return frontiers[:max_frontiers]
+    
+    def custom_recovery(self):          
+        if self.min_distance_front < 0.35:
+            self.move(-0.1, 0.2)  # Retrocede ligeramente
+            if self.min_distance_left < self.min_distance_right:
+                self.turn(45)
+            else:
+                self.turn(-45)
+        else:
+            self.move(0.1, 0.2)  # Avanza en línea recta con velocidad optimizada
+            
 
     def smart_exploration(self, max_frontiers=15):
         """
@@ -242,8 +285,10 @@ class TurtleBotActions:
 
                 # Calcular el giro inicial que debe hacer el robot
                 yaw = math.atan2(y - self.current_pose.position.y, x - self.current_pose.position.x)
-
-                self.send_goal(x, y, yaw)
+                # Publicar la frontera objetivo en RViz
+                self.publish_target_frontier((x, y))  # Publicamos la frontera a la que se dirige el robot
+                rospy.loginfo(f"explorando frontera: {explored_Frontiers}")
+                self.send_goal(x, y, 0)
 
         rospy.loginfo("Exploración finalizada.")
 
@@ -260,10 +305,21 @@ class TurtleBotActions:
         goal.target_pose.pose.orientation.z = q[2]
         goal.target_pose.pose.orientation.w = q[3]
 
+        self.client.cancel_all_goals()  # Cancelar cualquier objetivo anterior
         self.client.send_goal(goal)
-        self.client.wait_for_result(timeout=rospy.Duration(30))  # esperar 30s máx
+        
+        # Esperamos el resultado durante un máximo de 30 segundos
+        self.client.wait_for_result()
+        
+        # Verificar si el estado es exitoso
+        state = self.client.get_state()
 
-        return self.client.get_state()
+        # Si el estado no es un éxito, activamos el comportamiento de recuperación personalizado
+        if state != actionlib.GoalStatus.SUCCEEDED:
+            self.custom_recovery()  # Llamar al comportamiento de recuperación personalizado
+
+        return state
+
 
     def offset_target(self, x, y, extra=1.0):
         """
