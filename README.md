@@ -1,10 +1,10 @@
 # TurtleBot_ChatGPT_Wrapper_TFG
 
-# 🚀 Módulo de Control del Robot con ChatGPT y Telegram
+# 🚀 Módulo de Control del Robot con ChatGPT y SpeakLink
 
-Este módulo permite controlar un robot mediante comandos de voz/texto enviados a traves de la app SpeakLink (en desarrollo), procesados por ChatGPT y ejecutados en un TurtleBot en **TurtleSim** o **Gazebo**.
+Este módulo permite controlar un robot mediante comandos de voz/texto enviados a traves de la app SpeakLink (en desarrollo), procesados por ChatGPT y ejecutados en un TurtleBot en **Gazebo**.
 
-![diagrama tfg](![diagrama tfg](https://github.com/user-attachments/assets/e7fc4391-5885-4637-ad0d-fea1261d75af))
+![diagrama tfg](https://github.com/user-attachments/assets/e7fc4391-5885-4637-ad0d-fea1261d75af)
 
 
 ## 📌 Configuración Inicial
@@ -42,34 +42,16 @@ Para ejecutar el paquete, simplemente ejecuta el script `launcher.sh` dentro del
 
 ---
 
-## 🎮 Simulación en **Gazebo** en vez de **TurtleSim**
+## 🎮 Simulación en **Gazebo**
 
-Si prefieres usar **Gazebo**, edita la línea correspondiente en el script `launcher.sh` y cambia el **topic** en la clase `turtlebotActions` de `/turtle1/cmd_vel` a `/cmd_vel`.
-
-### 🔧 Pasos para cambiar a Gazebo:
-
-1️⃣ Añade estas líneas en el launcher.sh:
+Para simular en **Gazebo**:
+1️⃣ Añade estas líneas en el launcher.sh, para modificar el tipo de robot que quieres simular, y el mundo que quieres cargar en las simulacion:
 
 ```bash
 export TURTLEBOT3_MODEL=burger  # Define el modelo del robot
 roslaunch turtlebot3_gazebo turtlebot3_empty_world.launch  # Inicia el mundo en Gazebo
 ```
 
-2️⃣ Modifica la publicación de velocidades en `turtlebotActions`:
-
-📌 **Antes:**
-
-```python
-self.publisher = rospy.Publisher('/turtle1/cmd_vel', Twist, queue_size=10)
-```
-
-📌 **Después:**
-
-```python
-self.publisher = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
-```
-
----
 
 ## 📚 Más Información
 
