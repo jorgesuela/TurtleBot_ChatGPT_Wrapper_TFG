@@ -28,7 +28,7 @@ export OPENAI_API_KEY="AQUI_LA_CLAVE"
 ---
 
 ### :calling: SpeakLink: app para controlar el robot
-Para poder controlar el robot, ambos dispositivos deberan conectarse a la misma red y se deberá especificar tanto la ip como el puerto por el que se enviarán los mensajes al nodo de ros.
+Para poder controlar el robot, ambos dispositivos deberan conectarse a la misma red y se deberá especificar tanto la ip como el puerto por el que se enviarán los mensajes al nodo de ros. Aunque no es necesario y se puede hacer de forma manual, se ha desarrollado una app que facilita este proceso.
 
 Enlace de la app: (en desarrollo🔧)
 
