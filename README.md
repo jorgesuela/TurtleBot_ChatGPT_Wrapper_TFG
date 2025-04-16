@@ -19,7 +19,7 @@ Antes de usar el módulo, debes definir una variables de entorno:
 ### 🧠 1. Configurar la API Key de ChatGPT
 
 Se requiere una cuenta de OpenAI con saldo disponible.\
-💰 **Costo estimado**: \~0.002 USD por 300 tokens de prompt.
+💰 **Costo estimado de gpt-3.5**: \~0.002 USD por 300 tokens de prompt.
 
 ```bash
 export OPENAI_API_KEY="AQUI_LA_CLAVE"
@@ -29,6 +29,7 @@ export OPENAI_API_KEY="AQUI_LA_CLAVE"
 
 ### :calling: SpeakLink: app para controlar el robot
 Para poder controlar el robot, ambos dispositivos deberan conectarse a la misma red y se deberá especificar tanto la ip como el puerto por el que se enviarán los mensajes al nodo de ros.
+
 Enlace de la app: (en desarrollo🔧)
 
 ## ▶️ Ejecución del Módulo
@@ -47,7 +48,7 @@ Si prefieres usar **Gazebo**, edita la línea correspondiente en el script `laun
 
 ### 🔧 Pasos para cambiar a Gazebo:
 
-1️⃣ Añade estas líneas en el script:
+1️⃣ Añade estas líneas en el launcher.sh:
 
 ```bash
 export TURTLEBOT3_MODEL=burger  # Define el modelo del robot
