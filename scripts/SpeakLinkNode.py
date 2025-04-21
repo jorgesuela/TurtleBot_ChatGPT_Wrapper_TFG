@@ -8,6 +8,7 @@ from std_msgs.msg import String
 from io import BytesIO
 from pydub import AudioSegment
 import speech_recognition as sr
+import socket
 
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -21,6 +22,18 @@ class WSSpeechToTextNode:
         self.pub = rospy.Publisher('/speech_to_text', String, queue_size=10)
         self.recognizer = sr.Recognizer()
         rospy.loginfo("Nodo WebSocket Speech-to-Text iniciado.")
+
+    def get_local_ip(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            # No se necesita conexión real, solo se usa para determinar IP local
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+        except Exception:
+            ip = "127.0.0.1"
+        finally:
+            s.close()
+        return ip
 
     def process_text(self, text):
         # Eliminar la cabecera "txt robot " si existe
@@ -77,6 +90,8 @@ class WSSpeechToTextNode:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         start_server = websockets.serve(self.handle_client, "0.0.0.0", PORT, max_size=None)
+        local_ip = self.get_local_ip()
+        rospy.loginfo(f"Servidor WebSocket iniciado en: {GREEN}ws://{local_ip}:{PORT}{RESET}")
         rospy.loginfo("Esperando mensajes desde SpeakLink ...")
         loop.run_until_complete(start_server)
         loop.run_forever()
