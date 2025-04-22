@@ -70,8 +70,8 @@ class ChatGPTProcessor:
             "                - El comando 'add_place' requiere el parámetro 'name' todo en minusculas y sin acentos.\n"
             "                - frases como 'esto es el salon' o 'guarda este sitio como el salon', significan que hagas un add_place.\n"
             "                - El comando 'go_to_place' requiere el parámetro 'place', que es el nombre de un lugar, todo en minusculas y sin acentos.\n"
-            "                - si se te pide que vayas a algun lugar(go_to_place), estos son los sitios a los que eres capaz de ir, debes ser capaz de intuir a donde quiere ir el usuario:\n"
             "                - la accion explore necesita el argumento time_limit, si no se especifica por defecto pon 60 segundos. el tiempo siempre sera en segundos\n"
+            "                - si se te pide que vayas a algun lugar(go_to_place), estos son los sitios a los que eres capaz de ir, debes ser capaz de intuir a donde quiere ir el usuario. Si no sabes a que se refiere, devuelve array vacio:\n"
             f"Lugares disponibles: {places_text}\n"
             f"Entrada: '{user_input}'"
         )

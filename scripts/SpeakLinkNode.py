@@ -83,8 +83,13 @@ class WSSpeechToTextNode:
                 else:
                     rospy.loginfo(f"{YELLOW}Texto recibido por WS: {message}{RESET}")
                     self.process_text(message)
+        except websockets.exceptions.ConnectionClosed as e:
+            rospy.logwarn(f"Conexión cerrada correctamente: {e}")
         except Exception as e:
             rospy.logerr(f"Error en la conexión WebSocket: {e}")
+        finally:
+            await websocket.close()  # Asegura que se cierra el WebSocket
+
 
     def start_server(self):
         loop = asyncio.new_event_loop()
