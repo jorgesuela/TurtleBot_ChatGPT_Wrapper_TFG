@@ -60,7 +60,7 @@ class ChatGPTProcessor:
             "{\"action\": \"move\", \"distance\": 1, \"velocity\": 0.25}, "
             "{\"action\": \"turn\", \"angle\": 90}, "
             "{\"action\": \"move\", \"distance\": 1}, "
-            "{\"action\": \"explore\"}, "
+            "{\"action\": \"explore\", \"time_limit\": 80}, "
             "{\"action\": \"stop\"}, "
             "{\"action\": \"add_place\", \"name\": \"cocina\"}, "
             "{\"action\": \"go_to_place\", \"place\": \"cocina\"}]\n"
@@ -71,6 +71,7 @@ class ChatGPTProcessor:
             "                - frases como 'esto es el salon' o 'guarda este sitio como el salon', significan que hagas un add_place.\n"
             "                - El comando 'go_to_place' requiere el parámetro 'place', que es el nombre de un lugar, todo en minusculas y sin acentos.\n"
             "                - si se te pide que vayas a algun lugar(go_to_place), estos son los sitios a los que eres capaz de ir, debes ser capaz de intuir a donde quiere ir el usuario:\n"
+            "                - la accion explore necesita el argumento time_limit, si no se especifica por defecto pon 60 segundos. el tiempo siempre sera en segundos\n"
             f"Lugares disponibles: {places_text}\n"
             f"Entrada: '{user_input}'"
         )

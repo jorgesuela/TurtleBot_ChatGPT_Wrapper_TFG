@@ -38,8 +38,10 @@ class TurtleBotControlNode:
             rospy.loginfo(f"{YELLOW}Ejecutando acción: {command}{RESET}")
             self.process_single_action(command)
             rospy.loginfo(f"{GREEN}Acción ejecutada.{RESET}")
+            rospy.loginfo("Esperando mas comandos...")
         except Exception as e:
             rospy.logerr(f"Error al ejecutar el comando: {e}")
+            rospy.loginfo("Esperando mas comandos...")
 
     def process_single_action(self, command):
         try:
@@ -50,7 +52,7 @@ class TurtleBotControlNode:
                 "stop": lambda cmd: self.actions.stop(),
                 "go_to_place": lambda cmd: self.actions.go_to_place(cmd.get("place")),
                 "add_place": lambda cmd: self.actions.add_place(cmd),
-                "explore": lambda cmd: self.actions.smart_exploration()
+                "explore": lambda cmd: self.actions.smart_exploration(cmd.get("time_limit"))
             }
             action_type = command.get("action")
             if action_type in action_map:

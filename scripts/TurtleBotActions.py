@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import subprocess
+import time
 import rospy
 import math
 from geometry_msgs.msg import Twist
@@ -9,10 +11,9 @@ import actionlib
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from tf.transformations import quaternion_from_euler
 from nav_msgs.msg import OccupancyGrid
-import heapq
 from visualization_msgs.msg import Marker
 from std_msgs.msg import ColorRGBA
-from geometry_msgs.msg import Point  # Asegúrate de importar Point
+
 
 class TurtleBotActions:
     
@@ -79,11 +80,10 @@ class TurtleBotActions:
         marker.lifetime = rospy.Duration(0)  # El marker no se elimina automáticamente
 
         # Definir la posición del marcador
-        p = Point()
-        p.x = target_frontier[0]
-        p.y = target_frontier[1]
-        p.z = 0
-        marker.points.append(p)
+        marker.pose.position.x = target_frontier[0]
+        marker.pose.position.y = target_frontier[1]
+        marker.pose.position.z = 0
+        marker.pose.orientation.w = 1.0
 
         # Publica el marcador
         self.marker_pub.publish(marker)
@@ -114,24 +114,6 @@ class TurtleBotActions:
         twist.angular.z = angular_speed if angle < 0 else -angular_speed  
     
         self.execute_action(twist, duration)
-
-    def obstacle_avoidance(self):
-        """
-        Evita obstáculos utilizando la información del láser.
-        Si se detecta un obstáculo, el robot retrocede y gira en la dirección opuesta al obstáculo.
-        """
-        # Si hay obstaculo delante
-        if self.min_distance_front < 0.35:
-                # Retrocede ligeramente si se encuentra un obstaculo
-                self.move(-0.1, 0.2)
-                # Gira hacia la direccion con el obstaculo mas lejano
-                if self.min_distance_left < self.min_distance_right:
-                    self.turn(45)
-                else:
-                    self.turn(-45)
-        else:
-            # Si no hay obstaculo delante
-            self.move(0.1, 0.2)
 
     def stop(self):
         twist = Twist()
@@ -185,61 +167,6 @@ class TurtleBotActions:
             rospy.loginfo("Robot ha llegado a su destino.")
         else:
             rospy.logwarn("No se pudo llegar al destino.")
-      
-    def find_frontiers(self, max_frontiers=5):
-        """
-        Devuelve las fronteras más prometedoras para la exploración inteligente.
-        Esta versión mejora la eficiencia de la selección de fronteras.
-        """
-        frontiers = []
-        if self.map_data is None:
-            return frontiers
-
-        width = self.map_data.info.width
-        height = self.map_data.info.height
-        resolution = self.map_data.info.resolution
-        origin = self.map_data.info.origin.position
-        data = self.map_data.data
-
-        def is_valid(x, y):
-            return 0 <= x < width and 0 <= y < height
-
-        processed_cells = set()
-
-        # Evaluar celdas adyacentes para detectar fronteras
-        for y in range(1, height - 1):
-            for x in range(1, width - 1):
-                idx = x + y * width
-                if data[idx] == 0 and idx not in processed_cells:
-                    unknown_count = 0
-                    for dx in [-1, 0, 1]:
-                        for dy in [-1, 0, 1]:
-                            nx, ny = x + dx, y + dy
-                            n_idx = nx + ny * width
-                            if is_valid(nx, ny) and data[n_idx] == -1:
-                                unknown_count += 1
-                    if unknown_count >= 4:  # Frontera válida
-                        wx = origin.x + x * resolution
-                        wy = origin.y + y * resolution
-
-                        # Comprobamos si está rodeada de obstáculos
-                        obstacle_neighbors = 0
-                        for dx in [-1, 0, 1]:
-                            for dy in [-1, 0, 1]:
-                                nx, ny = x + dx, y + dy
-                                n_idx = nx + ny * width
-                                if is_valid(nx, ny) and data[n_idx] == 100:  # Ocupado por un obstáculo
-                                    obstacle_neighbors += 1
-
-                        # Si está rodeada de obstáculos, la descartamos
-                        if obstacle_neighbors < 6:  # Si no tiene más de 6 vecinos ocupados, es válida
-                            frontiers.append((wx, wy))
-                            processed_cells.add(idx)
-
-        # Limitar a un número máximo de fronteras
-        frontiers = sorted(frontiers, key=lambda p: math.hypot(p[0] - self.current_pose.position.x, p[1] - self.current_pose.position.y))
-
-        return frontiers[:max_frontiers]
     
     def custom_recovery(self):          
         if self.min_distance_front < 0.35:
@@ -249,49 +176,31 @@ class TurtleBotActions:
             else:
                 self.turn(-45)
         else:
-            self.move(0.1, 0.2)  # Avanza en línea recta con velocidad optimizada
-            
+            self.move(0.1, 0.2)  # Avanza en línea recta con velocidad optimizada     
 
-    def smart_exploration(self, max_frontiers=15):
+    def smart_exploration(self, time_limit):
         """
-        Explora de forma inteligente priorizando zonas inexploradas cercanas.
-        Utiliza heurísticas para seleccionar las fronteras de exploración más prometedoras.
+        Explora de forma inteligente usando explore_lite durante un tiempo determinado.
+        La terminal se cerrará automáticamente después de 'time_limit' segundos.
         """
-        rospy.loginfo(f"Iniciando exploración inteligente ...")
-        explored_Frontiers = 0
-        while not rospy.is_shutdown():
-            if explored_Frontiers >= max_frontiers:
-                rospy.loginfo("Limite de fronteras exploradas alcanzado. Finalizando.")
-                break
+        # Comando para lanzar explore_lite con el tiempo límite en segundos
+        explore_lite_command = f"timeout {time_limit}s roslaunch explore_lite explore.launch"
 
-            # Buscar fronteras a explorar
-            frontiers = self.find_frontiers()
-            if not frontiers:
-                rospy.loginfo("No se encontraron más zonas desconocidas. Exploración finalizada.")
-                break
+        # Comando para abrir una nueva terminal, ejecutar explore_lite y luego cerrarla después del tiempo límite
+        terminal_command = f"gnome-terminal -- bash -c \"{explore_lite_command}; exit\""
 
-            # Evaluación de las fronteras según su proximidad y su área.
-            if self.current_pose:
-                heap = []
-                for frontier in frontiers:
-                    dist = math.hypot(frontier[0] - self.current_pose.position.x, frontier[1] - self.current_pose.position.y)
-                    # Aquí puedes agregar más criterios de evaluación (ej. área o "abrirse" en zona desconocida).
-                    heapq.heappush(heap, (dist, frontier))
+        # Inicia el proceso de explore_lite en una nueva terminal
+        rospy.loginfo(f"Iniciando exploración inteligente durante {time_limit} segundos...")
 
-                # Extraer la frontera más cercana
-                closest_frontier = heapq.heappop(heap)[1]
-                (x, y) = self.offset_target(*closest_frontier)
-                explored_Frontiers += 1
+        # Ejecutar el comando en una nueva terminal
+        subprocess.Popen(terminal_command, shell=True)
 
-                # Calcular el giro inicial que debe hacer el robot
-                yaw = math.atan2(y - self.current_pose.position.y, x - self.current_pose.position.x)
-                # Publicar la frontera objetivo en RViz
-                self.publish_target_frontier((x, y))  # Publicamos la frontera a la que se dirige el robot
-                rospy.loginfo(f"explorando frontera: {explored_Frontiers}")
-                self.send_goal(x, y, 0)
+        # Asegúrate de que el proceso termine completamente
+        rospy.sleep(time_limit+ 1)
+        self.client.cancel_all_goals()
+        rospy.loginfo("Exploración terminada.")
 
-        rospy.loginfo("Exploración finalizada.")
-
+    
     def send_goal(self, x, y, yaw):
         "Envia el robot a unas coordenadas especificas con un angulo inicial especifico"
         goal = MoveBaseGoal()
@@ -306,6 +215,7 @@ class TurtleBotActions:
         goal.target_pose.pose.orientation.w = q[3]
 
         self.client.cancel_all_goals()  # Cancelar cualquier objetivo anterior
+        self.publish_target_frontier((x, y))  # Publicar la frontera objetivo en RViz
         self.client.send_goal(goal)
         
         # Esperamos el resultado durante un máximo de 30 segundos
@@ -319,26 +229,6 @@ class TurtleBotActions:
             self.custom_recovery()  # Llamar al comportamiento de recuperación personalizado
 
         return state
-
-
-    def offset_target(self, x, y, extra=1.0):
-        """
-        Una vez el robot navega a la frontera inexplorada mas cercana, usando este metodo
-        el robot se adentra "extra" metros en la zona inexplorada para obtener mas informacion para el mapa
-        """
-        if self.current_pose is None:
-            return x, y
-
-        dx = x - self.current_pose.position.x
-        dy = y - self.current_pose.position.y
-        dist = math.hypot(dx, dy)
-        if dist == 0:
-            return x, y
-
-        nx = dx / dist
-        ny = dy / dist
-
-        return x + nx * extra, y + ny * extra
     
     def execute_action(self, twist, duration):
         rate = rospy.Rate(10)  # 10 Hz
