@@ -4,7 +4,7 @@
 gnome-terminal -- bash -c "roscore; exec bash"
 
 # Esperar un poco para asegurar que roscore arranque
-sleep 4
+sleep 5
 
 # Iniciar nodo 1: TelegramSpeechToTextNode
 gnome-terminal -- bash -c "cd ~/catkin_ws/src/turtlebot_chatgpt_wrapper && rosrun turtlebot_chatgpt_wrapper SpeakLinkNode.py; exec bash"
