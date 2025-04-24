@@ -38,7 +38,6 @@ class DatabaseHandler:
             conn.commit()
             conn.close()
 
-
     def get_place(self, name):
         with self.lock:  # Asegurarse de que solo un hilo acceda a la base de datos a la vez
             conn = self.create_connection()

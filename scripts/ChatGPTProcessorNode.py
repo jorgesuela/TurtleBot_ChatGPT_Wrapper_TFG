@@ -11,9 +11,11 @@ GREEN = "\033[92m"
 YELLOW = "\033[93m"
 RESET = "\033[0m"
 
-"""NODO CHATGPT PROCESSOR"""
-"""Este nodo procesa los mensajes de voz recibidos a traves del topic /speech_to_text, los envía a OpenAI y publica las acciones 
-resultantes hacia el nodo controller a traves del topic /turtlebot_single_action' ."""
+"""
+NODO CHATGPT PROCESSOR
+Este nodo procesa los mensajes de voz recibidos a traves del topic /speech_to_text, los envía a OpenAI y publica las acciones 
+resultantes de una en una hacia el nodo controller a traves del topic /turtlebot_single_action' .
+"""
 
 class ChatGPTProcessor:
     def __init__(self):

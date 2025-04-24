@@ -14,6 +14,11 @@ from nav_msgs.msg import OccupancyGrid
 from visualization_msgs.msg import Marker
 from std_msgs.msg import ColorRGBA
 
+"""
+CLASE DE ACCIONES DEL TURTLEBOT
+Esta clase contiene métodos para controlar el robot TurtleBot, incluyendo
+movimiento, giro, adición de lugares a una base de datos y exploración inteligente.
+"""
 
 class TurtleBotActions:
     
@@ -199,7 +204,6 @@ class TurtleBotActions:
         rospy.sleep(time_limit+ 1)
         self.client.cancel_all_goals()
         rospy.loginfo("Exploración terminada.")
-
     
     def send_goal(self, x, y, yaw):
         "Envia el robot a unas coordenadas especificas con un angulo inicial especifico"

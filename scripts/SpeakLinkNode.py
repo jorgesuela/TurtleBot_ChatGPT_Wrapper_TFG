@@ -16,6 +16,14 @@ RESET = "\033[0m"
 
 PORT = 5005  # Nuevo puerto WebSocket
 
+"""
+NODO SPEAKLINK
+Este nodo se encarga de recibir mensajes de texto y audio a través de un WebSocket.
+Los mensajes de texto se publican en el topic /speech_to_text.
+Los mensajes de audio se convierten a texto y también se publican en el mismo topic.
+El nodo utiliza la librería SpeechRecognition para el reconocimiento de voz y pydub para la manipulación de audio.
+"""
+
 class WSSpeechToTextNode:
     def __init__(self):
         rospy.init_node('ws_speech_to_text_node', anonymous=True)
@@ -24,6 +32,10 @@ class WSSpeechToTextNode:
         rospy.loginfo("Nodo WebSocket Speech-to-Text iniciado.")
 
     def get_local_ip(self):
+        """
+        Obtiene la IP local del dispositivo para mostrarla por pantalla
+        al iniciar el nodo y que sea mas facil configurar la app.
+        """
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             # No se necesita conexión real, solo se usa para determinar IP local
@@ -36,19 +48,23 @@ class WSSpeechToTextNode:
         return ip
 
     def process_text(self, text):
+        """
+        Procesa el texto recibido, y lo publica en el topic /speech_to_text"
+        """
         # Eliminar la cabecera "txt robot " si existe
         if text.lower().startswith("txt robot "):
             text = text[10:].strip()  # Elimina "txt robot " y los posibles espacios al principio
         
         text = text.strip().lower()
-        if "robot" in text:
-            msg = String(data=text)
-            self.pub.publish(msg)
-            rospy.loginfo(f"{GREEN}Mensaje publicado en /speech_to_text: {text}{RESET}")
-        else:
-            rospy.logwarn("Mensaje ignorado, debe contener la palabra clave 'robot'.")
+        msg = String(data=text)
+        self.pub.publish(msg)
+        rospy.loginfo(f"{GREEN}Mensaje publicado en /speech_to_text: {text}{RESET}")
+
 
     def process_audio(self, audio_bytes):
+        """
+        Procesa el audio recibido, lo convierte a texto y lo publica en el topic /speech_to_text
+        """
         temp_file = "/tmp/input.wav"
         try:
             audio = AudioSegment.from_file(BytesIO(audio_bytes), format="webm")
@@ -70,6 +86,10 @@ class WSSpeechToTextNode:
                 os.remove(temp_file)
 
     async def handle_client(self, websocket, path):
+        """
+        Maneja la conexión del cliente WebSocket.
+        Recibe mensajes de texto o audio y los procesa.
+        """
         try:
             async for message in websocket:
                 if isinstance(message, bytes):
@@ -90,8 +110,10 @@ class WSSpeechToTextNode:
         finally:
             await websocket.close()  # Asegura que se cierra el WebSocket
 
-
     def start_server(self):
+        """
+        Inicia el servidor WebSocket y espera conexiones de clientes.
+        """
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         start_server = websockets.serve(self.handle_client, "0.0.0.0", PORT, max_size=None)

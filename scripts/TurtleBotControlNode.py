@@ -10,6 +10,12 @@ GREEN = "\033[92m"
 YELLOW = "\033[93m"
 RESET = "\033[0m"
 
+"""
+NODO CONTROL DEL TURTLEBOT
+Este nodo se encarga de recibir comandos desde el topic /turtlebot_single_action
+y ejecutar las acciones correspondientes en el TurtleBot.
+"""
+
 class TurtleBotControlNode:
 
     def __init__(self):
@@ -31,6 +37,10 @@ class TurtleBotControlNode:
         rospy.loginfo("Nodo de control del TurtleBot iniciado. Esperando comandos...")
 
     def execute_command(self, msg):
+        """
+        Callback para el topic /turtlebot_single_action.
+        Recibe un mensaje JSON con la acción a ejecutar y llama a la función correspondiente.
+        """
         try:
             command_list = json.loads(msg.data)
             command = command_list[0] if isinstance(command_list, list) else command_list
@@ -44,6 +54,10 @@ class TurtleBotControlNode:
             rospy.loginfo("Esperando mas comandos...")
 
     def process_single_action(self, command):
+        """
+        Procesa una acción individual recibida desde el topic /turtlebot_single_action.
+        Se encarga de llamar a la función correspondiente en TurtleBotActions.
+        """
         try:
             # diccionario de acciones con su clave "nombre" y su valor "funcion asociada"
             action_map = {
