@@ -20,7 +20,7 @@ Antes de usar el módulo, debes definir una variables de entorno:
 ### 🧠 2. Configurar la API Key de ChatGPT
 
 Se requiere una cuenta de OpenAI con saldo disponible.\
-💰 **Costo estimado de gpt-3.5**: \~0.002 USD por 300 tokens de prompt.
+💰 **Costo estimado de gpt-3.5**: \~0.002 USD por 1000 tokens de prompt.
 
 ```bash
 export OPENAI_API_KEY="AQUI_LA_CLAVE"
