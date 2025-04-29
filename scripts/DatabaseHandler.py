@@ -38,6 +38,21 @@ class DatabaseHandler:
             conn.commit()
             conn.close()
 
+    def delete_place(self, name):
+        """
+        Elimina un lugar de la base de datos por su nombre.
+        :param name: Nombre del lugar a eliminar.
+        :return: True si el lugar fue eliminado, False si no existía.
+        """
+        with self.lock:
+            conn = self.create_connection()
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM places WHERE name=?', (name,))
+            deleted = cursor.rowcount > 0  # True si alguna fila fue eliminada
+            conn.commit()
+            conn.close()
+            return deleted
+
     def get_place(self, name):
         with self.lock:  # Asegurarse de que solo un hilo acceda a la base de datos a la vez
             conn = self.create_connection()

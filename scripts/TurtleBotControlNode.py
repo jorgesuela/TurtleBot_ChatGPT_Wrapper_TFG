@@ -66,6 +66,7 @@ class TurtleBotControlNode:
                 "stop": lambda cmd: self.actions.stop(),
                 "go_to_place": lambda cmd: self.actions.go_to_place(cmd.get("place")),
                 "add_place": lambda cmd: self.actions.add_place(cmd),
+                "delete_place": lambda cmd: self.actions.delete_place(cmd),
                 "explore": lambda cmd: self.actions.smart_exploration(cmd.get("time_limit"))
             }
             action_type = command.get("action")

@@ -2,6 +2,7 @@
 
 import subprocess
 import time
+from tqdm import tqdm
 import rospy
 import math
 from geometry_msgs.msg import Twist
@@ -150,6 +151,22 @@ class TurtleBotActions:
         else:
             rospy.logwarn("Faltan parámetros para añadir el lugar. Asegúrate de incluir nombre.")
 
+    def delete_place(self, command):
+        """
+        Elimina un lugar de la base de datos si existe.
+        :param place_name: Nombre del lugar a eliminar.
+        """
+        place_name = command.get("name")
+        try:
+            result = self.db.delete_place(place_name)
+            if result:
+                rospy.loginfo(self.db.get_all_places())  # debe incluir 'test_place'
+                rospy.loginfo(f"Lugar '{place_name}' eliminado de la base de datos.")
+            else:
+                rospy.logwarn(f"No se encontró el lugar '{place_name}' en la base de datos.")
+        except Exception as e:
+            rospy.logerr(f"Error al eliminar el lugar: {e}")
+
     def go_to_place(self, place_name):
         """
         Navega a un lugar específico utilizando la base de datos.
@@ -200,8 +217,9 @@ class TurtleBotActions:
         # Ejecutar el comando en una nueva terminal
         subprocess.Popen(terminal_command, shell=True)
 
-        # Asegúrate de que el proceso termine completamente
-        rospy.sleep(time_limit+ 1)
+         # Barra de progreso en la terminal principal
+        for _ in tqdm(range(time_limit), desc="Explorando", ncols=70):
+            time.sleep(1)
         self.client.cancel_all_goals()
         rospy.loginfo("Exploración terminada.")
     
