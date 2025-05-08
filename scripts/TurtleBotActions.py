@@ -14,6 +14,7 @@ from tf.transformations import quaternion_from_euler
 from nav_msgs.msg import OccupancyGrid
 from visualization_msgs.msg import Marker
 from std_msgs.msg import ColorRGBA
+from actionlib_msgs.msg import GoalStatusArray
 
 """
 CLASE DE ACCIONES DEL TURTLEBOT
@@ -203,24 +204,37 @@ class TurtleBotActions:
     def smart_exploration(self, time_limit):
         """
         Explora de forma inteligente usando explore_lite durante un tiempo determinado.
-        La terminal se cerrará automáticamente después de 'time_limit' segundos.
+        Termina anticipadamente si no hay metas activas durante al menos 5 segundos seguidos.
         """
-        # Comando para lanzar explore_lite con el tiempo límite en segundos
-        explore_lite_command = f"timeout {time_limit}s roslaunch explore_lite explore.launch"
+        finalizado_antes_de_tiempo = False
+        self.last_goal_time = time.time()
 
-        # Comando para abrir una nueva terminal, ejecutar explore_lite y luego cerrarla después del tiempo límite
-        terminal_command = f"gnome-terminal -- bash -c \"{explore_lite_command}; exit\""
+        def status_callback(msg):
+            # Reiniciamos el temporizador si hay alguna meta activa o pendiente
+            if any(status.status in [0, 1] for status in msg.status_list):  # PENDING or ACTIVE
+                self.last_goal_time = time.time()
 
-        # Inicia el proceso de explore_lite en una nueva terminal
-        rospy.loginfo(f"Iniciando exploración inteligente durante {time_limit} segundos...")
+        rospy.Subscriber("/move_base/status", GoalStatusArray, status_callback)
 
-        # Ejecutar el comando en una nueva terminal
-        subprocess.Popen(terminal_command, shell=True)
+        # Lanzar explore_lite
+        explore_cmd = f"gnome-terminal -- bash -c \"roslaunch explore_lite explore.launch; exec bash\""
+        subprocess.Popen(explore_cmd, shell=True)
+        rospy.loginfo("Exploración iniciada. Esperando a que se publiquen fronteras...")
 
-         # Barra de progreso en la terminal principal
+        time.sleep(5)  # Espera inicial para que explore_lite publique su primera meta
+
+        # Bucle con barra de progreso
         for _ in tqdm(range(time_limit), desc="Explorando", ncols=70):
+            if time.time() - self.last_goal_time > 5.0:
+                finalizado_antes_de_tiempo = True
+                break
             time.sleep(1)
+
+        # Terminar exploración
+        subprocess.call("pkill -f explore.launch", shell=True)
         self.client.cancel_all_goals()
+        if finalizado_antes_de_tiempo:
+            rospy.loginfo("No se encontraron mas zonas inexploradas!")
         rospy.loginfo("Exploración terminada.")
     
     def send_goal(self, x, y, yaw):
