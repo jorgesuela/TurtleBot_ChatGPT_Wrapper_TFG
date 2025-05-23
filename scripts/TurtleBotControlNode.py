@@ -5,6 +5,7 @@ import json
 from std_msgs.msg import String
 from TurtleBotActions import TurtleBotActions
 from DatabaseHandler import DatabaseHandler
+from RobotSpeaker import RobotSpeaker
 
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -27,8 +28,12 @@ class TurtleBotControlNode:
         rospy.init_node('turtlebot_control_node', anonymous=True)
         
         # Crear una instancia de DatabaseHandler en el hilo principal
-        self.db = DatabaseHandler('/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/places.db')
-        self.db.create_table()  # Asegúrate de que la tabla exista
+        self.db = DatabaseHandler('/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/database/turtlebot_db.db')
+        self.db.create_coordinates_table() 
+        self.db.create_user_requests_table()
+
+        # Inicializar el cliente de sonido
+        self.speaker = RobotSpeaker()
         
         # Pasar el objeto de base de datos a TurtleBotActions
         self.actions = TurtleBotActions(self.db)
@@ -59,23 +64,39 @@ class TurtleBotControlNode:
         Se encarga de llamar a la función correspondiente en TurtleBotActions.
         """
         try:
-            # diccionario de acciones con su clave "nombre" y su valor "funcion asociada"
+            say_text = command.get("say")
+            action_type = command.get("action")
+
+            # Caso especial: solo "say" sin acción → no ejecutar nada más
+            if say_text and not action_type:
+                self.speaker.say(say_text)
+                return
+
+            # Primero habla, si corresponde
+            if say_text:
+                self.speaker.say(say_text)
+
+            # Ejecuta acción si existe
             action_map = {
-                "move": lambda cmd: self.actions.move(cmd.get("distance", 0), cmd.get("velocity", 0)),
+                "move": lambda cmd: self.actions.move(cmd.get("distance", 0), cmd.get("velocity", 0.35)),
                 "turn": lambda cmd: self.actions.turn(cmd.get("angle", 0)),
                 "stop": lambda cmd: self.actions.stop(),
                 "go_to_place": lambda cmd: self.actions.go_to_place(cmd.get("place")),
                 "add_place": lambda cmd: self.actions.add_place(cmd),
                 "delete_place": lambda cmd: self.actions.delete_place(cmd),
-                "explore": lambda cmd: self.actions.smart_exploration(cmd.get("time_limit"))
+                "explore": lambda cmd: self.actions.smart_exploration(cmd.get("time_limit", 60)),
+                "follow_me": lambda cmd: self.actions.follow_me(),
+                "stop_follow_me": lambda cmd: self.actions.stop_follow_me()
             }
-            action_type = command.get("action")
+
             if action_type in action_map:
                 action_map[action_type](command)
             else:
                 rospy.logwarn(f"Acción '{action_type}' no reconocida.")
+
         except Exception as e:
             rospy.logerr(f"Error al procesar la acción: {e}")
+
 
 if __name__ == "__main__":
     control = TurtleBotControlNode()

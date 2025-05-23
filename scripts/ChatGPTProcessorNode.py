@@ -29,8 +29,10 @@ class ChatGPTProcessor:
         self._setup_ros()
 
         # Crear una instancia de DatabaseHandler en el hilo principal
-        self.db = DatabaseHandler('/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/places.db')
-        self.db.create_table()  # Asegúrate de que la tabla exista
+        self.db = DatabaseHandler('/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/database/turtlebot_db.db')
+        # Asegúrate de que las tablas existan
+        self.db.create_coordinates_table() 
+        self.db.create_user_requests_table()
 
         rospy.loginfo("Nodo ChatGPTProcessor iniciado. Esperando mensajes...")
 
@@ -41,7 +43,7 @@ class ChatGPTProcessor:
             rospy.logerr("No se encontró la API Key de OpenAI.")
             raise RuntimeError("API Key de OpenAI no encontrada.")
         self.client = OpenAI(api_key=api_key)
-        self.model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+        self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
 
     def _setup_ros(self):
         """Configura la suscripción y publicación de ROS."""
@@ -52,31 +54,34 @@ class ChatGPTProcessor:
         """Envía la entrada a OpenAI y devuelve la lista de acciones."""
         # Convertir la lista de lugares en un formato de texto para agregar al prompt
         places_text = ", ".join(places)
+        # Últimas acciones del usuario (solo las peticiones) para mayor contexto
+        recent_interactions = self.db.get_last_n_user_requests()
+        recent_user_inputs = [user for user, _ in recent_interactions]
+        recent_context = json.dumps(recent_user_inputs)
+        
         
         prompt = (
-            "Eres un asistente que traduce comandos en lenguaje natural en JSON para un TurtleBot. "
-            "Devuelve siempre la respuesta en formato JSON válido. "
-            "Si no hay ninguna acción, responde con un array vacío []. "
-            "Ejemplo de salida esperada:\n"
-            "[{\"action\": \"move\", \"distance\": 2, \"velocity\": 0.15}, "
-            "{\"action\": \"move\", \"distance\": 1, \"velocity\": 0.25}, "
-            "{\"action\": \"turn\", \"angle\": 90}, "
-            "{\"action\": \"move\", \"distance\": 1}, "
-            "{\"action\": \"explore\", \"time_limit\": 80}, "
-            "{\"action\": \"stop\"}, "
-            "{\"action\": \"add_place\", \"name\": \"cocina\"}, "
-            "{\"action\": \"delete_place\", \"name\": \"salon\"}, "
-            "{\"action\": \"go_to_place\", \"place\": \"cocina\"}]\n"
-            "Notas importantes: - izquierda es ángulo negativo y derecha ángulo positivo\n"
-            "                - El formato de salida debe ser un array siempre.\n"
-            "                - La funcion move tiene un parametro velocidad, tu rango va desde muy lento 0.15 a muy rapido 0.35. si no te dicen nada, la vel por defecto es 0.25.\n"
-            "                - El comando 'add_place' y 'delete_place' requieren el parámetro 'name' todo en minusculas y sin acentos.\n"
-            "                - frases como 'esto es el salon' o 'guarda este sitio como el salon', significan que hagas un add_place.\n"
-            "                - El comando 'go_to_place' requiere el parámetro 'place', que es el nombre de un lugar, todo en minusculas y sin acentos.\n"
-            "                - la accion explore necesita el argumento time_limit, si no se especifica por defecto pon 60 segundos. el tiempo siempre sera en segundos\n"
-            "                - si se te pide que vayas a algun lugar(go_to_place), estos son los sitios a los que eres capaz de ir, debes ser capaz de intuir a donde quiere ir el usuario. Si no sabes a que se refiere, devuelve array vacio:\n"
-            f"Lugares disponibles: {places_text}\n"
-            f"Entrada: '{user_input}'"
+            "Eres un asistente que convierte instrucciones en lenguaje natural en comandos JSON para un TurtleBot.\n"
+            "Tu salida debe ser siempre estrictamente un **array JSON válido** (sin código, sin etiquetas adicionales, sin bloques Markdown).\n\n"
+            "Reglas estrictas de formato:\n"
+            "- Solo devuelve un array JSON. No expliques, no añadas encabezados como 'Respuesta:' ni bloques ```json.\n"
+            "- Todas las acciones deben tener un campo 'say', que contiene lo que el robot dirá.\n"
+            "- si no reconoces ninguna accion valida, sino que simplemente te hacen una pregunta, usa el campo say para responder dicha pregunta.\n"
+            "- Si no hay ninguna acción reconocible, responde únicamente con: [{\"say\": \"No he entendido lo que quieres que haga.\"}]\n\n"
+            "Ejemplos válidos de salida:\n"
+            "[{\"action\": \"move\", \"distance\": 2, \"velocity\": 0.35, \"say\": \"¡vale, voy!\"}]\n"
+            "[{\"action\": \"go_to_place\", \"place\": \"cocina\", \"say\": \"Voy a la cocina\"}]\n"
+            "[{\"say\": \"No sé cómo ayudarte con eso.\"}]\n\n"
+            "Detalles importantes:\n"
+            "- 'move' requiere: 'distance' y opcionalmente 'velocity' (0.25 a 0.5). Por defecto, 0.35.\n"
+            "- 'turn' requiere: 'angle' (negativo para izquierda, positivo para derecha).\n"
+            "- 'add_place' y 'delete_place' requieren 'name' (en minúsculas y sin acentos). Sirve para recordar coordenadas de lugares en la bd.\n"
+            "- 'go_to_place' requiere 'place'. Solo lugares válidos que esten en la bd, actualmente estan disponibles los siguientes: " + "[" + places_text + "]" + "\n"
+            "- 'explore' requiere 'time_limit'. Si no se da, usa 60 por defecto.\n"
+            "- 'follow_me' y 'stop_follow_me' no requieren parámetros.\n\n"
+            "Sé creativo y amigable en los mensajes de 'say'. Varía el tono. No uses siempre las mismas frases.\n\n"
+            "Esta es tu memoria de ultimas acciones solicitadas ordendas de mas reciente a mas antigua:" + recent_context + ".\n"
+            f"Instrucción del usuario: '{user_input}'"
         )
         try:
             response = self.client.chat.completions.create(
@@ -113,6 +118,9 @@ class ChatGPTProcessor:
         actions = self._get_actions_from_gpt(user_input, places)
         if actions:
             self._publish_actions(actions)
+            # guardar la entrada del usuario y la respuesta de GPT en la base de datos
+            gpt_response_json = json.dumps(actions)
+            self.db.insert_user_request(user_input, gpt_response_json)
 
     def spin(self):
         """Mantiene el nodo en funcionamiento."""

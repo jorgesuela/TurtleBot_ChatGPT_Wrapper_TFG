@@ -8,13 +8,10 @@ import math
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-import actionlib
-from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
-from tf.transformations import quaternion_from_euler
 from nav_msgs.msg import OccupancyGrid
-from visualization_msgs.msg import Marker
-from std_msgs.msg import ColorRGBA
 from actionlib_msgs.msg import GoalStatusArray
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from RobotSpeaker import RobotSpeaker
 
 """
 CLASE DE ACCIONES DEL TURTLEBOT
@@ -28,31 +25,34 @@ class TurtleBotActions:
         """
         Topics:
         subscribe: /scan, /odom, /map
-        publish: /cmd_vel
+        publish: /cmd_vel, /move_base_simple/goal
         param db: Base de datos para almacenar lugares.
         """
+
+        # este es el que mueve el robot real: '/teleop_velocity_smoother/raw_cmd_vel'
+        # este es el que mueve el robot gazebo: '/cmd_vel_mux/input/navi'
         self.db = db
-        self.publisher = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
-        self.marker_pub = rospy.Publisher('/visualization_marker', Marker, queue_size=10)  # Publisher de Markers
+        self.publisher = rospy.Publisher('/teleop_velocity_smoother/raw_cmd_vel', Twist, queue_size=10)
+        self.goal_pub = rospy.Publisher('/move_base_simple/goal', PoseStamped, queue_size=10)  # Nuevo publisher
+
         self.current_pose = None
         self.map_data = None
+
+        # Inicializar el cliente de sonido
+        self.speaker = RobotSpeaker()
 
         # para saber las distancias mínimas en cada dirección
         self.min_distance = float('inf')
         self.min_distance_front = float('inf')
         self.min_distance_left = float('inf')
-        self.min_distance_right= float('inf')
+        self.min_distance_right = float('inf')
 
-        # Cliente de acción para la navegación
-        self.client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
-        self.client.wait_for_server()
-        
         # Suscripciones
         rospy.Subscriber("/scan", LaserScan, self.laser_callback)
         rospy.Subscriber("/odom", Odometry, self.odom_callback)
         rospy.Subscriber("/map", OccupancyGrid, self.map_callback)
 
-        rospy.sleep(1)  # dar tiempo a la conexión con el topic de odometría
+        rospy.sleep(1)  # dar tiempo a la conexión con los topics
 
     def odom_callback(self, msg):
         "permite conocer la posicion actual del robot en todo momento"
@@ -67,33 +67,6 @@ class TurtleBotActions:
     def map_callback(self, msg):
         "util para saber que partes del mapa estan exploradas y sin explorar"
         self.map_data = msg
-
-    def publish_target_frontier(self, target_frontier):
-        """
-        Publica la frontera objetivo en RViz como un marcador específico.
-        :param target_frontier: Tupla (x, y) representando la frontera objetivo.
-        """
-        marker = Marker()
-        marker.header.frame_id = "map"
-        marker.header.stamp = rospy.Time.now()
-        marker.ns = "target_frontier"
-        marker.id = 1  # Usamos un ID diferente para diferenciar este marcador
-        marker.type = Marker.SPHERE
-        marker.action = Marker.ADD
-        marker.scale.x = 0.2  # Tamaño del marcador
-        marker.scale.y = 0.2
-        marker.scale.z = 0.2
-        marker.color = ColorRGBA(0.0, 1.0, 0.0, 1.0)  # Color verde para la frontera objetivo
-        marker.lifetime = rospy.Duration(0)  # El marker no se elimina automáticamente
-
-        # Definir la posición del marcador
-        marker.pose.position.x = target_frontier[0]
-        marker.pose.position.y = target_frontier[1]
-        marker.pose.position.z = 0
-        marker.pose.orientation.w = 1.0
-
-        # Publica el marcador
-        self.marker_pub.publish(marker)
 
     def move(self, distance, velocity):
         """
@@ -168,28 +141,63 @@ class TurtleBotActions:
         except Exception as e:
             rospy.logerr(f"Error al eliminar el lugar: {e}")
 
+    def get_robot_position(self):
+        """
+        Este metodo se utiliza para saber la posicion actual del robot.
+        Es mas fiable que el odom para comprobar si el robot ha llegado a la meta.
+        """
+        try:
+            msg = rospy.wait_for_message('/amcl_pose', PoseWithCovarianceStamped, timeout=5.0)
+            pos = msg.pose.pose.position
+            return (pos.x, pos.y)
+        except rospy.ROSException:
+            rospy.logwarn("No se pudo obtener la posición del robot desde /amcl_pose.")
+            return None
+
+    def has_arrived(self, goal_x, goal_y, tolerance=0.3):
+        """
+        Este método comprueba si el robot ha llegado a la meta.
+        """
+        pos = self.get_robot_position()
+        if pos is None:
+            return False
+        dx = goal_x - pos[0]
+        dy = goal_y - pos[1]
+        distance = math.hypot(dx, dy)
+        rospy.loginfo(f"Distancia actual al objetivo: {distance:.2f} m")
+        return distance <= tolerance
+
     def go_to_place(self, place_name):
-        """
-        Navega a un lugar específico utilizando la base de datos.
-        :param place_name: Nombre del lugar al que se desea ir.
-        """
-        # Obtener las coordenadas del lugar desde la base de datos
         place = self.db.get_place(place_name)
         if place is None:
             rospy.logwarn(f"Lugar '{place_name}' no encontrado en la base de datos.")
             return
-        
-        # Acceder correctamente a las coordenadas, ya que 'place' es una tupla (x, y)
-        x = place[0]
-        y = place[1]
 
+        x, y = place
         rospy.loginfo(f"Enviando al robot hacia {place_name} ({x}, {y})...")
-        self.send_goal(x, y, 0)
-        
-        if self.client.get_state() == actionlib.GoalStatus.SUCCEEDED:
-            rospy.loginfo("Robot ha llegado a su destino.")
-        else:
-            rospy.logwarn("No se pudo llegar al destino.")
+
+        goal_msg = PoseStamped()
+        goal_msg.header.stamp = rospy.Time.now()
+        goal_msg.header.frame_id = "map"
+        goal_msg.pose.position.x = x
+        goal_msg.pose.position.y = y
+        goal_msg.pose.orientation.w = 1.0  # Asume orientación hacia adelante
+
+        self.goal_pub.publish(goal_msg)
+        rospy.loginfo("Objetivo publicado en /move_base_simple/goal.")
+
+        # Esperar hasta que llegue o se agote el tiempo
+        timeout = rospy.Time.now() + rospy.Duration(120)  # 2 minutos máx
+        rate = rospy.Rate(1)  # Comprobar cada segundo
+        while not rospy.is_shutdown() and rospy.Time.now() < timeout:
+            if self.has_arrived(x, y):
+                rospy.loginfo("¡El robot ha llegado a la meta!")
+                self.speaker.say(f"he llegado al destino {place_name} con exito.")
+                return
+            rate.sleep()
+
+        rospy.logwarn("El robot no llegó a la meta dentro del tiempo esperado.")
+
     
     def custom_recovery(self):          
         if self.min_distance_front < 0.35:
@@ -232,40 +240,42 @@ class TurtleBotActions:
 
         # Terminar exploración
         subprocess.call("pkill -f explore.launch", shell=True)
-        self.client.cancel_all_goals()
         if finalizado_antes_de_tiempo:
             rospy.loginfo("No se encontraron mas zonas inexploradas!")
         rospy.loginfo("Exploración terminada.")
     
-    def send_goal(self, x, y, yaw):
-        "Envia el robot a unas coordenadas especificas con un angulo inicial especifico"
-        goal = MoveBaseGoal()
-        goal.target_pose.header.frame_id = "map"
-        goal.target_pose.header.stamp = rospy.Time.now()
-        goal.target_pose.pose.position.x = x
-        goal.target_pose.pose.position.y = y
-        q = quaternion_from_euler(0, 0, yaw)
-        goal.target_pose.pose.orientation.x = q[0]
-        goal.target_pose.pose.orientation.y = q[1]
-        goal.target_pose.pose.orientation.z = q[2]
-        goal.target_pose.pose.orientation.w = q[3]
+    def follow_me(self):
+        if hasattr(self, 'follower_active') and self.follower_active:
+            rospy.logwarn("El modo 'Follow Me' ya está activo internamente.")
+            return
 
-        self.client.cancel_all_goals()  # Cancelar cualquier objetivo anterior
-        self.publish_target_frontier((x, y))  # Publicar la frontera objetivo en RViz
-        self.client.send_goal(goal)
-        
-        # Esperamos el resultado durante un máximo de 30 segundos
-        self.client.wait_for_result()
-        
-        # Verificar si el estado es exitoso
-        state = self.client.get_state()
+        result = subprocess.run(['pgrep', '-f', 'follower.launch'], stdout=subprocess.PIPE)
+        if result.stdout:
+            rospy.logwarn("Ya hay una instancia del nodo 'follower' ejecutándose externamente.")
+            return
 
-        # Si el estado no es un éxito, activamos el comportamiento de recuperación personalizado
-        if state != actionlib.GoalStatus.SUCCEEDED:
-            self.custom_recovery()  # Llamar al comportamiento de recuperación personalizado
+        rospy.loginfo("Iniciando el modo 'Follow Me'...")
+        follow_cmd = 'gnome-terminal -- bash -c "roslaunch turtlebot_follower follower.launch; exec bash"'
+        subprocess.Popen(follow_cmd, shell=True)
+        self.follower_active = True
+        time.sleep(3)
+        rospy.loginfo("'Follow Me' activo.")
 
-        return state
-    
+    def stop_follow_me(self):
+        if not hasattr(self, 'follower_active') or not self.follower_active:
+            rospy.logwarn("El modo 'Follow Me' no está activo.")
+            return
+
+        # Detener el proceso lanzado con roslaunch follower.launch
+        rospy.loginfo("Deteniendo el modo 'Follow Me'...")
+
+        # Esto matará cualquier proceso que contenga 'follower.launch' en su línea de comando
+        subprocess.call("pkill -f 'roslaunch turtlebot_follower follower.launch'", shell=True)
+
+        self.follower_active = False
+        time.sleep(2)
+        rospy.loginfo("'Follow Me' detenido.")
+
     def execute_action(self, twist, duration):
         rate = rospy.Rate(10)  # 10 Hz
         start_time = rospy.Time.now().to_sec()
