@@ -1,5 +1,23 @@
 #!/usr/bin/env python3
 
+# COSAS PARA PROBAR MAÑANA:
+# arrepentirse de un movimiento.
+# follow me.
+# ir a obstaculo mas cercano.
+# ponerle un go to place mas dificil.
+
+# COSAS PENDIENTES:
+# - de momento se usa telegram, los audios de la app no se han podido solucionar.
+# - poder identificar esquinas y paredes y moverte hacia ellas. Esto no es viable con la api de chatgpt ya que solo procesa texto.
+#   habria que usar otra api como la de dalle o similar, y ademas iria muy lento porque extraer y procesar info de imagenes es costoso para la ia.
+# - hay problemas con la camara en el robot real, no va el follower. no entiendo porque, puede ser un problema de mi instalacion de ROS.
+
+# COSAS AÑADIDAS: 
+# - se ha añadido a la base datos la posicion en la que el robot se encontraba, esto permite revertir acciones
+# - se ha añadido una nueva función para que el robot se acerque al obstáculo más cercano y se detenga a una distancia segura
+# - se modifico el prompt para las nuevas funciones.
+# - de momento se usa telegram, los audios de la app no se han podido solucionar.
+
 import subprocess
 import time
 from tqdm import tqdm
@@ -32,7 +50,7 @@ class TurtleBotActions:
         # este es el que mueve el robot real: '/teleop_velocity_smoother/raw_cmd_vel'
         # este es el que mueve el robot gazebo: '/cmd_vel_mux/input/navi'
         self.db = db
-        self.publisher = rospy.Publisher('/teleop_velocity_smoother/raw_cmd_vel', Twist, queue_size=10)
+        self.publisher = rospy.Publisher('/cmd_vel_mux/input/navi', Twist, queue_size=10)
         self.goal_pub = rospy.Publisher('/move_base_simple/goal', PoseStamped, queue_size=10)  # Nuevo publisher
 
         self.current_pose = None
@@ -59,10 +77,25 @@ class TurtleBotActions:
         self.current_pose = msg.pose.pose
 
     def laser_callback(self, msg):
-        """Detecta obstáculos en diferentes direcciones."""
-        self.min_distance_front = min(min(msg.ranges[:30] + msg.ranges[-30:]), 3.0)  # Frontal
-        self.min_distance_left = min(min(msg.ranges[60:120]), 3.0)  # Izquierda
-        self.min_distance_right = min(min(msg.ranges[-120:-60]), 3.0)  # Derecha
+        """Detecta obstáculos en direcciones específicas con frontal estrecho (±15° reales)."""
+        num_ranges = len(msg.ranges)
+        angle_min = msg.angle_min
+        angle_max = msg.angle_max
+        angle_increment = msg.angle_increment
+
+        center_index = num_ranges // 2  # Índice del ángulo 0 rad (frente)
+        angle_range_deg = 20
+        offset = int((angle_range_deg * math.pi / 180.0) / angle_increment)  # convertir grados a radianes y luego a pasos
+
+        # Frontal ±15° alrededor del índice central
+        front_indices = msg.ranges[center_index - offset : center_index + offset]
+        left_indices = msg.ranges[int(3*num_ranges/4):]  # 90° a la izquierda
+        right_indices = msg.ranges[:int(num_ranges/4)]  # 90° a la derecha
+
+        # Filtrar distancias válidas
+        self.min_distance_front = min([d for d in front_indices if msg.range_min < d < msg.range_max] or [float('inf')])
+        self.min_distance_left = min([d for d in left_indices if msg.range_min < d < msg.range_max] or [float('inf')])
+        self.min_distance_right = min([d for d in right_indices if msg.range_min < d < msg.range_max] or [float('inf')])
 
     def map_callback(self, msg):
         "util para saber que partes del mapa estan exploradas y sin explorar"
@@ -174,32 +207,44 @@ class TurtleBotActions:
             return
 
         x, y = place
-        rospy.loginfo(f"Enviando al robot hacia {place_name} ({x}, {y})...")
+        self._go_to_target(x, y, yaw=0.0, destination_name=place_name)
 
+    def go_to_coordinates(self, x, y, yaw=0.0):
+        self._go_to_target(x, y, yaw)
+
+    def _go_to_target(self, x, y, yaw=0.0, destination_name=None):
+        rospy.loginfo(f"Enviando al robot hacia ({x}, {y}, yaw={yaw})...")
+
+        from tf.transformations import quaternion_from_euler
+        from geometry_msgs.msg import Quaternion
+
+        quat = quaternion_from_euler(0, 0, yaw)
         goal_msg = PoseStamped()
         goal_msg.header.stamp = rospy.Time.now()
         goal_msg.header.frame_id = "map"
         goal_msg.pose.position.x = x
         goal_msg.pose.position.y = y
-        goal_msg.pose.orientation.w = 1.0  # Asume orientación hacia adelante
+        goal_msg.pose.orientation = Quaternion(*quat)
 
         self.goal_pub.publish(goal_msg)
         rospy.loginfo("Objetivo publicado en /move_base_simple/goal.")
 
         # Esperar hasta que llegue o se agote el tiempo
         timeout = rospy.Time.now() + rospy.Duration(120)  # 2 minutos máx
-        rate = rospy.Rate(1)  # Comprobar cada segundo
+        rate = rospy.Rate(1)
         while not rospy.is_shutdown() and rospy.Time.now() < timeout:
             if self.has_arrived(x, y):
                 rospy.loginfo("¡El robot ha llegado a la meta!")
-                self.speaker.say(f"he llegado al destino {place_name} con exito.")
+                if destination_name:
+                    self.speaker.say(f"he llegado al destino {destination_name} con éxito.")
+                else:
+                    self.speaker.say("he llegado al punto indicado.")
                 return
             rate.sleep()
 
         rospy.logwarn("El robot no llegó a la meta dentro del tiempo esperado.")
 
-    
-    def custom_recovery(self):          
+    def custom_recovery(self):
         if self.min_distance_front < 0.35:
             self.move(-0.1, 0.2)  # Retrocede ligeramente
             if self.min_distance_left < self.min_distance_right:
@@ -275,6 +320,75 @@ class TurtleBotActions:
         self.follower_active = False
         time.sleep(2)
         rospy.loginfo("'Follow Me' detenido.")
+
+    def approach_nearest_obstacle(self, safe_distance=0.8, speed=0.15):
+        """
+        Gira hacia el obstáculo más cercano y se aproxima hasta mantener una distancia segura.
+        Detiene el avance si pierde la lectura o detecta que está demasiado cerca.
+        """
+        rospy.loginfo("Buscando el obstáculo más cercano...")
+
+        last_distance = None
+        no_change_counter = 0
+        max_no_change = 5  # Máximo número de ciclos sin progreso
+
+
+        try:
+            scan_msg = rospy.wait_for_message("/scan", LaserScan, timeout=5.0)
+        except rospy.ROSException:
+            rospy.logwarn("No se pudieron obtener datos del láser.")
+            return
+
+        valid_ranges = [
+            (i, dist) for i, dist in enumerate(scan_msg.ranges)
+            if scan_msg.range_min < dist < scan_msg.range_max
+        ]
+
+        if not valid_ranges:
+            rospy.logwarn("No se detectaron obstáculos válidos.")
+            return
+
+        min_index, min_dist = min(valid_ranges, key=lambda x: x[1])
+        angle_to_turn = scan_msg.angle_min + min_index * scan_msg.angle_increment
+        angle_degrees = math.degrees(angle_to_turn)
+
+        rospy.loginfo(f"Obstáculo más cercano a {min_dist:.2f} m, ángulo: {angle_degrees:.1f}°")
+        #alinear el robot hacia el obstáculo más cercano
+        self.turn(-angle_degrees)
+
+        twist = Twist()
+        twist.linear.x = speed
+        step_duration = 0.15  # avanzar en pequeños pasos
+        rate = rospy.Rate(10)
+
+        while not rospy.is_shutdown():
+            # Protección: si la lectura se vuelve inválida
+            if not (0.0 < self.min_distance_front < float('inf')):
+                rospy.logwarn("Distancia frontal inválida. Deteniendo por seguridad.")
+                break
+
+            if self.min_distance_front <= safe_distance:
+                rospy.loginfo("Distancia segura alcanzada. Deteniendo.")
+                break
+
+            # Detección de atasco si la distancia no cambia significativamente
+            avg_front_distance = self.min_distance_front
+
+            if last_distance and abs(avg_front_distance - last_distance) < 0.01:
+                no_change_counter += 1
+                if no_change_counter >= max_no_change:
+                    rospy.logwarn("El robot parece atascado. Abortando acercamiento.")
+                    self.speaker.say("Me he quedado atascado.")
+                    break
+            else:
+                no_change_counter = 0
+
+            last_distance = avg_front_distance
+            self.execute_action(twist, step_duration)
+            rate.sleep()
+
+        self.stop()
+        self.speaker.say("Distancia segura alcanzada.He llegado.")
 
     def execute_action(self, twist, duration):
         rate = rospy.Rate(10)  # 10 Hz
