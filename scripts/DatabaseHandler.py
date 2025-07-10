@@ -1,5 +1,6 @@
 import sqlite3
 import threading
+import json
 
 "IMPORTANTE: Tanto el nodo de chatgpt como el nodo de control del robot acceden a la base de datos."
 "Esta clase debe usar thread locks para no permitir accesos simultaneos"
@@ -36,6 +37,7 @@ class DatabaseHandler:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_input TEXT,
                     gpt_response TEXT,
+                    pose_json TEXT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -53,27 +55,30 @@ class DatabaseHandler:
             conn.commit()
             conn.close()
 
-    # solo se guardan las ultimas 25 interacciones
-    def insert_user_request(self, user_input, gpt_response):
+    # solo se guardan las ultimas 10 interacciones
+    def insert_user_request(self, user_input, gpt_response, pose=None):
         with self.lock:
             conn = self.create_connection()
             cursor = conn.cursor()
-            
-            # Insertar la nueva interacción
+
+            pose_json = json.dumps(pose) if pose else None
+
+            # Insertar la nueva interacción con la pose
             cursor.execute('''
-                INSERT INTO user_requests (user_input, gpt_response) VALUES (?, ?)
-            ''', (user_input, gpt_response))
-            
-            # Borrar las entradas más antiguas si hay más de 25
+                INSERT INTO user_requests (user_input, gpt_response, pose_json)
+                VALUES (?, ?, ?)
+            ''', (user_input, gpt_response, pose_json))
+
+            # Borrar las entradas más antiguas si hay más de 10
             cursor.execute('''
                 DELETE FROM user_requests
                 WHERE id NOT IN (
                     SELECT id FROM user_requests
                     ORDER BY timestamp DESC
-                    LIMIT 25
+                    LIMIT 10
                 )
             ''')
-            
+
             conn.commit()
             conn.close()
 
@@ -113,12 +118,12 @@ class DatabaseHandler:
             conn.close()
             return [place[0] for place in places]  # Devuelve una lista con los nombres de los lugares
         
-    def get_last_n_user_requests(self, n=5):
+    def get_last_n_user_requests(self, n=3):
         with self.lock:
             conn = self.create_connection()
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT user_input, gpt_response FROM user_requests
+                SELECT user_input, gpt_response, pose_json FROM user_requests
                 ORDER BY timestamp DESC LIMIT ?
             ''', (n,))
             result = cursor.fetchall()
