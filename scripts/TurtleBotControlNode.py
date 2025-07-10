@@ -28,7 +28,13 @@ class TurtleBotControlNode:
         rospy.init_node('turtlebot_control_node', anonymous=True)
         
         # Crear una instancia de DatabaseHandler en el hilo principal
-        self.db = DatabaseHandler('/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/database/turtlebot_db.db')
+        self.db_paths = {
+            "database_1": "/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/database/turtlebot_database_1.db", # ESTA DB ES DEL MAPA XXXX
+            "database_2": "/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/database/turtlebot_database_2.db", # ESTA DB ES DEL MAPA XXXX
+            "database_3": "/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/database/turtlebot_database_3.db", # ESTA DB ES DEL MAPA XXXX
+        }
+        self.current_database = "database_1" # MAPA SELEECCIOANDO, CAMBIAR SEGUN NECESIDAD
+        self.db = DatabaseHandler(self.db_paths[self.current_database])
         self.db.create_coordinates_table() 
         self.db.create_user_requests_table()
 
@@ -82,11 +88,18 @@ class TurtleBotControlNode:
                 "turn": lambda cmd: self.actions.turn(cmd.get("angle", 0)),
                 "stop": lambda cmd: self.actions.stop(),
                 "go_to_place": lambda cmd: self.actions.go_to_place(cmd.get("place")),
+                "go_to_coordinates": lambda cmd: self.actions.go_to_coordinates(
+                    cmd.get("x"), cmd.get("y"), cmd.get("yaw", 0.0)
+                ),
                 "add_place": lambda cmd: self.actions.add_place(cmd),
                 "delete_place": lambda cmd: self.actions.delete_place(cmd),
                 "explore": lambda cmd: self.actions.smart_exploration(cmd.get("time_limit", 60)),
                 "follow_me": lambda cmd: self.actions.follow_me(),
-                "stop_follow_me": lambda cmd: self.actions.stop_follow_me()
+                "stop_follow_me": lambda cmd: self.actions.stop_follow_me(),
+                "approach_nearest_obstacle": lambda cmd: self.actions.approach_nearest_obstacle(
+                    safe_distance=cmd.get("safe_distance", 0.8),
+                    speed=cmd.get("speed", 0.15)
+                )
             }
 
             if action_type in action_map:
