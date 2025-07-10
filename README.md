@@ -3,8 +3,10 @@
 # 🚀 Módulo de Control del Robot con ChatGPT y SpeakLink
 
 Este módulo permite controlar un robot mediante comandos de voz/texto enviados a traves de la app SpeakLink (en desarrollo), procesados por ChatGPT y ejecutados en un TurtleBot en **Gazebo**.
+![Blank diagram (5)](https://github.com/user-attachments/assets/42fba6f4-04b7-45d9-8cf7-fc8f2264e872)
 
-![tfg_diagrama drawio](https://github.com/user-attachments/assets/b6847df9-c89e-4240-9f40-b444b5df8b1f)
+
+
 
 
 
