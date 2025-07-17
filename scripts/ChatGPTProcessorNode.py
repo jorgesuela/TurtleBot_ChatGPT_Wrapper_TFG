@@ -8,6 +8,7 @@ from openai import OpenAI, OpenAIError
 from DatabaseHandler import DatabaseHandler
 from nav_msgs.msg import Odometry
 import tf.transformations
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -36,14 +37,15 @@ class ChatGPTProcessor:
             "database_2": "/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/database/turtlebot_database_2.db", # ESTA DB ES DEL MAPA XXXX
             "database_3": "/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/database/turtlebot_database_3.db", # ESTA DB ES DEL MAPA XXXX
         }
-        self.current_database = "database_1" # MAPA SELEECCIOANDO, CAMBIAR SEGUN NECESIDAD
+        self.current_database = "database_1" # DATABASE SELECCIONADA, CAMBIAR SEGUN NECESIDAD
         self.db = DatabaseHandler(self.db_paths[self.current_database])
         # Asegúrate de que las tablas existan
         self.db.create_coordinates_table() 
         self.db.create_user_requests_table()
 
         self.current_pose = None
-        self.follower_active = False  # Indica si el robot está siguiendo al usuario
+        self.follower_state = "stopped" # Estado inicial del follower
+        rospy.Subscriber('/follower_state', String, self.follower_state_callback)
 
         rospy.loginfo("Nodo ChatGPTProcessor iniciado. Esperando mensajes...")
 
@@ -59,19 +61,25 @@ class ChatGPTProcessor:
     def _setup_ros(self):
         """Configura la suscripción y publicación de ROS."""
         self.subscription = rospy.Subscriber('/speech_to_text', String, self._process_speech_input)
-        self.odom_sub = rospy.Subscriber('/odom', Odometry, self._odom_callback)
+        rospy.Subscriber('/amcl_pose', PoseWithCovarianceStamped,
+                     self._amcl_callback, queue_size=1)
         self.publisher = rospy.Publisher('/turtlebot_single_action', String, queue_size=30)
 
-    def _odom_callback(self, msg):
-        """Actualiza la pose actual del robot."""
-        position = msg.pose.pose.position
-        orientation = msg.pose.pose.orientation
+    def follower_state_callback(self, msg):
+        self.follower_state = msg.data
 
-        yaw = self._quaternion_to_yaw(orientation)
+    def _amcl_callback(self, msg: PoseWithCovarianceStamped):
+        """Guarda la última pose estimada por AMCL en coordenadas del mapa."""
+        pos = msg.pose.pose.position
+        ori = msg.pose.pose.orientation
+
+        # Cuaternión → yaw
+        q = [ori.x, ori.y, ori.z, ori.w]
+        _, _, yaw = tf.transformations.euler_from_quaternion(q)
 
         self.current_pose = {
-            "x": round(position.x, 2),
-            "y": round(position.y, 2),
+            "x": round(pos.x, 2),
+            "y": round(pos.y, 2),
             "yaw": round(yaw, 2)
         }
 
@@ -130,7 +138,8 @@ class ChatGPTProcessor:
             "  - No digas simplemente que no sabes hacerlo si puedes hacer algo similar o útil."
             "- Si parece que te hacen una pregunta, responde únicamente con el campo 'say' y una respuesta adecuada.\n"
             "- Debes revisar siempre las interacciones anteriores para evitar responder con las mismas palabras.\n"
-            "- Mantén un tono amigable, proactivo e inteligente. Sé creativo en las respuestas de 'say'.\n\n"
+            "- El nodo de seguimiento follow me tarda un poco en arrancar, avisa al usuario que espere un momento y que se ponga delante del robot para empezar a caminar, le avisaras cuando este listo.\n"
+            "- Lo mas importante de todo es que mantengas un tono amigable, proactivo e inteligente y jamas repitas la misma respuesta, sé creativo en en el campo'say'.\n\n"
 
             "📌 Ejemplos válidos de salida:\n"
             "[{\"action\": \"move\", \"distance\": 2, \"velocity\": 0.2, \"say\": \"¡vale, voy!\"}]\n"
@@ -144,10 +153,10 @@ class ChatGPTProcessor:
             "- 'add_place' y 'delete_place': requieren 'name'. El nombre debe estar en minúsculas y sin acentos. Se usa para guardar/eliminar ubicaciones en la base de datos.\n"
             "- 'go_to_place': requiere 'place'. Solo se puede usar con lugares registrados en la base de datos. Los lugares actualmente disponibles son: [" + places_text + "]\n"
             "- 'explore': requiere 'time_limit'. Si no se especifica, usa 60 segundos por defecto.\n"
-            "- 'follow_me' y 'stop_follow_me': no requieren parámetros. si modo follow = true, en nodo ya esta activo y no hay que hacer nada. si el seguimiento esta activado, no se puede realizar ninguna otra accion, debes avisar al usuario para desactive el seguimiento si quiere hacer otras cosas.\n"
+            "- 'follow_me' y 'stop_follow_me': no requieren parámetros. si modo follow = started, en nodo ya esta activo y siguiendo y no hay que hacer nada. si follow = stopped, el nodo esta desactivado y no esta siguiendo. si el seguimiento esta activado, no se puede realizar ninguna otra accion, debes avisar al usuario para desactive el seguimiento si quiere hacer otras cosas.\n"
             "- 'go_to_coordinates': necesita la 'x', 'y' y 'yaw', se utiliza solo para mover al robot a las coordenadas donde estaba en la última interacción (revertir accion de movimiento). Debes usar las coordenadas de la ultima interaccion que este relacionada con movimiento.\n"
             "- 'approach_nearest_obstacle': permite al robot acercarse al obstáculo más cercano sin chocar. Acepta opcionalmente 'speed' (por defecto 0.15)\n\n."
-            
+
             "🧠 Contexto conversacional:\n"
             "- Frases como 'claro', 'hazlo', 'adelante', 'vale', 'sí por favor', deben interpretarse como una confirmación de la acción propuesta en la ultima interaccion."
             "- Usa la última interacción como contexto directo. Las anteriores son menos relevantes pero pueden ayudarte a mantener variedad y coherencia.\n"
@@ -155,7 +164,7 @@ class ChatGPTProcessor:
 
             f"📎 Última interacción inmediata (muy importante para referencias implícitas):\n{last_json}\n\n"
             f"📚 Interacciones anteriores (menos relevantes):\n{historial_json}\n\n"
-            f"📚 Estado del modo follow:\n{self.follower_active}\n\n"
+            f"📚 Estado del modo follow:\n{self.follower_state}\n\n"
             f"🗣️ Instrucción actual del usuario: '{user_input}'"
         )
 
@@ -198,20 +207,9 @@ class ChatGPTProcessor:
 
             for action in actions:
                 action_type = action.get("action")
-
                 # Detecta si es una acción de movimiento
                 if action_type in ["move", "turn", "go_to_place", "go_to_coordinates", "explore", "follow_me", "approach_nearest_obstacle"]:
                     movimiento_detectado = True
-
-                # Gestiona el estado del follower
-                if action_type == "follow_me":
-                    if not self.follower_active:
-                        self.follower_active = True
-                        rospy.loginfo(f"{GREEN}Follower ACTIVADO{RESET}")
-                elif action_type == "stop_follow_me":
-                    if self.follower_active:
-                        self.follower_active = False
-                        rospy.loginfo(f"{YELLOW}Follower DESACTIVADO{RESET}")
 
             # Guarda interacción en base de datos
             if movimiento_detectado and self.current_pose:

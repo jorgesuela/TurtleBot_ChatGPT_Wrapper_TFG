@@ -33,7 +33,7 @@ class TurtleBotControlNode:
             "database_2": "/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/database/turtlebot_database_2.db", # ESTA DB ES DEL MAPA XXXX
             "database_3": "/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/database/turtlebot_database_3.db", # ESTA DB ES DEL MAPA XXXX
         }
-        self.current_database = "database_1" # MAPA SELEECCIOANDO, CAMBIAR SEGUN NECESIDAD
+        self.current_database = "database_1" # DB SELEECCIONADA, CAMBIAR SEGUN NECESIDAD
         self.db = DatabaseHandler(self.db_paths[self.current_database])
         self.db.create_coordinates_table() 
         self.db.create_user_requests_table()

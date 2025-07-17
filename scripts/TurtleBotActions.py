@@ -1,22 +1,11 @@
 #!/usr/bin/env python3
 
-# COSAS PARA PROBAR MAÑANA:
-# arrepentirse de un movimiento.
-# follow me.
-# ir a obstaculo mas cercano.
-# ponerle un go to place mas dificil.
+# COSAS QUE NO FUNCIONAN: EL FOLLOWER NO VA BIEN EL SSH.
+#bash: /opt/ros/noetic/setup.bash: No such file or directory
+#Connection to 192.168.71.172 closed.
+#Pulsa ENTER para cerrar esta ventana
 
-# COSAS PENDIENTES:
-# - de momento se usa telegram, los audios de la app no se han podido solucionar.
-# - poder identificar esquinas y paredes y moverte hacia ellas. Esto no es viable con la api de chatgpt ya que solo procesa texto.
-#   habria que usar otra api como la de dalle o similar, y ademas iria muy lento porque extraer y procesar info de imagenes es costoso para la ia.
-# - hay problemas con la camara en el robot real, no va el follower. no entiendo porque, puede ser un problema de mi instalacion de ROS.
-
-# COSAS AÑADIDAS: 
-# - se ha añadido a la base datos la posicion en la que el robot se encontraba, esto permite revertir acciones
-# - se ha añadido una nueva función para que el robot se acerque al obstáculo más cercano y se detenga a una distancia segura
-# - se modifico el prompt para las nuevas funciones.
-# - de momento se usa telegram, los audios de la app no se han podido solucionar.
+# EL MAPA HAY QUE MEJORARLO, NO SE VE BIEN.
 
 import subprocess
 import time
@@ -29,7 +18,17 @@ from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
 from actionlib_msgs.msg import GoalStatusArray
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from std_msgs.msg import String
 from RobotSpeaker import RobotSpeaker
+import shlex, subprocess, time, rospy
+from std_msgs.msg import String
+import os
+import signal
+
+# necesario para el ssh automatico. el nodo follower debe estar corriendo en el robot
+ROBOT_USER = "turtlebot"  # ← usuario del robot
+ROBOT_IP   = "192.168.71.172"
+PASSWORD   = "ros"        # ← contraseña del robot
 
 """
 CLASE DE ACCIONES DEL TURTLEBOT
@@ -52,8 +51,9 @@ class TurtleBotActions:
         self.db = db
         self.publisher = rospy.Publisher('/cmd_vel_mux/input/navi', Twist, queue_size=10)
         self.goal_pub = rospy.Publisher('/move_base_simple/goal', PoseStamped, queue_size=10)  # Nuevo publisher
+        self.pub_state = rospy.Publisher('/follower_state', String, queue_size=10)
 
-        self.current_pose = None
+        self.current_pose = None            # guardará la última PoseWithCovarianceStamped
         self.map_data = None
 
         # Inicializar el cliente de sonido
@@ -67,14 +67,15 @@ class TurtleBotActions:
 
         # Suscripciones
         rospy.Subscriber("/scan", LaserScan, self.laser_callback)
-        rospy.Subscriber("/odom", Odometry, self.odom_callback)
+        rospy.Subscriber("/amcl_pose", PoseWithCovarianceStamped,
+                         self._amcl_callback, queue_size=1)
         rospy.Subscriber("/map", OccupancyGrid, self.map_callback)
 
         rospy.sleep(1)  # dar tiempo a la conexión con los topics
 
-    def odom_callback(self, msg):
-        "permite conocer la posicion actual del robot en todo momento"
-        self.current_pose = msg.pose.pose
+    def _amcl_callback(self, msg: PoseWithCovarianceStamped):
+        """Guarda la última estimación de pose de AMCL."""
+        self.current_pose = msg.pose.pose   
 
     def laser_callback(self, msg):
         """Detecta obstáculos en direcciones específicas con frontal estrecho (±15° reales)."""
@@ -175,17 +176,19 @@ class TurtleBotActions:
             rospy.logerr(f"Error al eliminar el lugar: {e}")
 
     def get_robot_position(self):
-        """
-        Este metodo se utiliza para saber la posicion actual del robot.
-        Es mas fiable que el odom para comprobar si el robot ha llegado a la meta.
-        """
-        try:
-            msg = rospy.wait_for_message('/amcl_pose', PoseWithCovarianceStamped, timeout=5.0)
-            pos = msg.pose.pose.position
-            return (pos.x, pos.y)
-        except rospy.ROSException:
-            rospy.logwarn("No se pudo obtener la posición del robot desde /amcl_pose.")
+        """Devuelve (x, y, yaw) de la última pose AMCL, o None si aún no hay dato."""
+        if self.amcl_pose is None:
             return None
+
+        x = self.amcl_pose.position.x
+        y = self.amcl_pose.position.y
+
+        # convierte el quaternion a yaw
+        import tf.transformations as tft
+        q = self.amcl_pose.orientation
+        _, _, yaw = tft.euler_from_quaternion([q.x, q.y, q.z, q.w])
+
+        return (x, y, yaw)
 
     def has_arrived(self, goal_x, goal_y, tolerance=0.3):
         """
@@ -288,37 +291,96 @@ class TurtleBotActions:
         if finalizado_antes_de_tiempo:
             rospy.loginfo("No se encontraron mas zonas inexploradas!")
         rospy.loginfo("Exploración terminada.")
+
+    # ------------- NECESARIO PARA EL FOLLOWER -----------------
     
+    def _ssh_command(self):
+        """Comando base ssh con sshpass."""
+        return (
+            f"sshpass -p {shlex.quote(PASSWORD)} "
+            f"ssh -tt -o StrictHostKeyChecking=no "
+            f"{ROBOT_USER}@{ROBOT_IP}"
+        )
+
+    def _running_remote(self) -> bool:
+        """True si follower.launch vive en el robot."""
+        chk = subprocess.run(
+            f"{self._ssh_command()} pgrep -fa follower.launch",
+            shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+        )
+        return bool(chk.stdout.strip())
+
     def follow_me(self):
-        if hasattr(self, 'follower_active') and self.follower_active:
-            rospy.logwarn("El modo 'Follow Me' ya está activo internamente.")
+        rospy.loginfo("Activando 'Follow Me' (ventana SSH)...")
+
+        try:
+            result = subprocess.run(
+                f"{self._ssh_command()} echo ok", shell=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10
+            )
+            if result.returncode != 0:
+                rospy.logerr("SSH inaccesible → abortando.")
+                self.speaker.say("No puedo conectar con el robot. Asegúrate de que está encendido y conectado a la red.")
+                return
+        except subprocess.TimeoutExpired:
+            rospy.logerr("SSH timeout → abortando.")
+            self.speaker.say("No puedo conectar con el robot. La conexión ha expirado.")
+            return
+        except Exception as e:
+            rospy.logerr(f"Error inesperado al probar SSH: {e}")
+            self.speaker.say("Error inesperado al intentar conectar con el robot.")
             return
 
-        result = subprocess.run(['pgrep', '-f', 'follower.launch'], stdout=subprocess.PIPE)
-        if result.stdout:
-            rospy.logwarn("Ya hay una instancia del nodo 'follower' ejecutándose externamente.")
-            return
+        # Comando remoto con setup y roslaunch, como en tu script funcional
+        remote_cmd = (
+            "source /opt/ros/noetic/setup.bash && "
+            "source ~/catkin_ws/devel/setup.bash && "
+            "roslaunch turtlebot_follower follower.launch"
+        )
+        remote_escaped = shlex.quote(remote_cmd)
 
-        rospy.loginfo("Iniciando el modo 'Follow Me'...")
-        follow_cmd = 'gnome-terminal -- bash -c "roslaunch turtlebot_follower follower.launch; exec bash"'
-        subprocess.Popen(follow_cmd, shell=True)
-        self.follower_active = True
-        time.sleep(3)
-        rospy.loginfo("'Follow Me' activo.")
+        # Construimos el comando completo para abrir gnome-terminal
+        full_cmd = f"{self._ssh_command()} {remote_escaped}"
+
+        term_cmd = (
+            f"gnome-terminal -- bash -c "
+            f"\"{full_cmd}; echo 'Pulsa ENTER para cerrar esta ventana'; read linea\""
+        )
+
+        rospy.loginfo("Lanzando terminal con el nodo follower")
+        self.term_proc = subprocess.Popen(term_cmd, shell=True, preexec_fn=os.setsid)
+
+        # Esperamos un poco para que el follower se inicie
+        time.sleep(5)
+
+        if self._running_remote():
+            self.pub_state.publish("started")
+            rospy.loginfo("'Follow Me' activo.")
+            self.speaker.say("Modo seguimiento activado. Ya puedes caminar.")
+        else:
+            rospy.logerr("El follower no arrancó. Cerrando ventana.")
+            self.speaker.say("No se pudo activar 'Follow Me'. Asegúrate de que el robot está listo.")
+            if self.term_proc.poll() is None:
+                self.term_proc.terminate()
 
     def stop_follow_me(self):
-        if not hasattr(self, 'follower_active') or not self.follower_active:
-            rospy.logwarn("El modo 'Follow Me' no está activo.")
-            return
+        rospy.loginfo("Deteniendo 'Follow Me'...")
 
-        # Detener el proceso lanzado con roslaunch follower.launch
-        rospy.loginfo("Deteniendo el modo 'Follow Me'...")
+        # Mata el nodo follower en el robot
+        subprocess.run(
+            f"{self._ssh_command()} pkill -f follower.launch",
+            shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10
+        )
 
-        # Esto matará cualquier proceso que contenga 'follower.launch' en su línea de comando
-        subprocess.call("pkill -f 'roslaunch turtlebot_follower follower.launch'", shell=True)
+        # Cierra la terminal local si está abierta
+        if getattr(self, "term_proc", None) and self.term_proc.poll() is None:
+            os.killpg(os.getpgid(self.term_proc.pid), signal.SIGTERM)
+            try:
+                self.term_proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.term_proc.kill()
 
-        self.follower_active = False
-        time.sleep(2)
+        self.pub_state.publish("stopped")
         rospy.loginfo("'Follow Me' detenido.")
 
     def approach_nearest_obstacle(self, safe_distance=0.8, speed=0.15):
@@ -388,8 +450,8 @@ class TurtleBotActions:
             rate.sleep()
 
         self.stop()
-        self.speaker.say("Distancia segura alcanzada.He llegado.")
-
+        self.speaker.say("Distancia segura alcanzada. He llegado.")
+        
     def execute_action(self, twist, duration):
         rate = rospy.Rate(10)  # 10 Hz
         start_time = rospy.Time.now().to_sec()
