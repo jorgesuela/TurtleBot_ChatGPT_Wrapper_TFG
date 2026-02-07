@@ -5,6 +5,11 @@
 # lo mejor seria que el amcl se lanzara desde el principio, y que el follow me no lanzara nada que el amcl ya tenga lanzado
 # pero como????
 
+#IMPORTANTEEEEEE!!!!!!!
+# he hecho esto ^^^, hay que probarlo:
+# en el robot, hay que cambiar el launch del follower para usar el nuevo que tengo en mi pc guardado
+# el antiguo lo renombras a ..._v2 para tenerlo de backup.
+
 
 import shlex, subprocess, os, signal, time
 from std_msgs.msg import String
@@ -307,7 +312,7 @@ class TurtleBotActions:
     def is_obstacle_ahead(self, threshold=0.7):
         return self.get_front_distance() < threshold
     
-    def approach_nearest_obstacle(self, safe_distance=0.75):
+    def approach_nearest_obstacle(self, safe_distance=0.50):
         """
         Busca el obstáculo más cercano, se orienta hacia él,
         lo centra finamente y se aproxima hasta una distancia segura.
@@ -526,12 +531,8 @@ class TurtleBotActions:
     def follow_me(self):
         """
         Lanza el modo 'Follow Me' en el robot remoto.
-        Antes detiene la cámara local para evitar conflictos.
         """
         rospy.loginfo("Activando 'Follow Me'...")
-
-        # Detener la cámara si está corriendo
-        self.stop_camera()
 
         # Probar SSH
         try:
@@ -593,71 +594,6 @@ class TurtleBotActions:
         # Actualiza estado y reinicia cámara
         self.follower_state_pub.publish("stopped")
         rospy.loginfo("'Follow Me' detenido.")
-        self.start_camera()
-        rospy.loginfo("Cámara reiniciada.")
-
-
-# HACEN FALTA PARA QUE EL FOLLOWER NO ROMPA EL ROBOT (camara y follower no pueden ir a la vez)
-    def start_camera(self):
-        """
-        Lanza el nodo de la cámara ASTRA en el robot vía SSH.
-        Evita abrir terminales locales y asegura que no se queden procesos zombies.
-        """
-        if getattr(self, "camera_process", None) and self.camera_process.poll() is None:
-            rospy.loginfo("La cámara ya está ejecutándose en el robot.")
-            return
-
-        rospy.loginfo("Iniciando nodo de cámara ASTRA en el robot...")
-        remote_cmd = (
-            "bash -c '"
-            "source /opt/ros/kinetic/setup.bash && "
-            "source ~/catkin_ws/devel/setup.bash && "
-            "roslaunch astra_launch astra.launch'"
-        )
-        remote_escaped = shlex.quote(remote_cmd)
-        full_cmd = f"{self._ssh_command()} {remote_escaped}"
-
-        # Lanzar el nodo remoto en background sin abrir terminal
-        self.camera_process = subprocess.Popen(
-            full_cmd,
-            shell=True,
-            preexec_fn=os.setsid,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-
-        # Esperar un momento para que el nodo arranque
-        time.sleep(2)
-        rospy.loginfo("Nodo de cámara lanzado en el robot vía SSH.")
-
-    def stop_camera(self):
-        """
-        Detiene el nodo de cámara en el robot y cierra el proceso local.
-        """
-        rospy.loginfo("Deteniendo nodo de cámara en el robot...")
-        try:
-            subprocess.run(
-                f"{self._ssh_command()} pkill -f astra.launch",
-                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5
-            )
-            rospy.loginfo("Nodo de cámara detenido correctamente en el robot.")
-        except subprocess.TimeoutExpired:
-            rospy.logwarn("No se pudo detener el nodo de cámara a tiempo.")
-        except Exception as e:
-            rospy.logerr(f"Error al detener la cámara: {e}")
-
-        # Limpiar el proceso local
-        if getattr(self, "camera_process", None):
-            if self.camera_process.poll() is None:
-                try:
-                    os.killpg(os.getpgid(self.camera_process.pid), signal.SIGTERM)
-                    self.camera_process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    rospy.logwarn("Proceso local de cámara no respondió a SIGTERM. Forzando cierre...")
-                    self.camera_process.kill()
-                except Exception as e:
-                    rospy.logerr(f"Error al cerrar proceso local de cámara: {e}")
-            self.camera_process = None
 
 # ESTO TIENE UN FALLO, NO SE CIERRA BIEN EL NODO
 
