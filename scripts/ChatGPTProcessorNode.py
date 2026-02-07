@@ -1,230 +1,304 @@
 #!/usr/bin/env python3
 
-import os
-import json
 import rospy
-from std_msgs.msg import String
+import os
 from openai import OpenAI, OpenAIError
-from DatabaseHandler import DatabaseHandler
-from nav_msgs.msg import Odometry
+import subprocess
 import tf.transformations
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from std_msgs.msg import String
+from sensor_msgs.msg import LaserScan
+from nav_msgs.msg import Odometry
+from RobotSpeaker import RobotSpeaker
+from DatabaseHandler import DatabaseHandler
 
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
 RESET = "\033[0m"
 
-"""
-NODO CHATGPT PROCESSOR
-Este nodo procesa los mensajes de voz recibidos a travimport tf.transformationses del topic /speech_to_text, los envía a OpenAI y publica las acciones 
-resultantes de una en una hacia el nodo controller a traves del topic /turtlebot_single_action' .
-"""
-
-class ChatGPTProcessor:
+class ChatGPTNode:
     def __init__(self):
-        """
-            Topics:
-            subscribe: /speech_to_text
-            publish: /turtlebot_single_action
-            """
-        rospy.init_node('chatgpt_processor_node', anonymous=True)
-        self._setup_openai()
-        self._setup_ros()
+        rospy.init_node('chatgpt_node', anonymous=True)
 
-        # Crear una instancia de DatabaseHandler en el hilo principal
+        # Configuración de bases de datos
         self.db_paths = {
-            "database_1": "/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/database/turtlebot_database_1.db", # ESTA DB ES DEL MAPA XXXX
-            "database_2": "/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/database/turtlebot_database_2.db", # ESTA DB ES DEL MAPA XXXX
-            "database_3": "/home/jorge/catkin_ws/src/turtlebot_chatgpt_wrapper/database/turtlebot_database_3.db", # ESTA DB ES DEL MAPA XXXX
+            "database_1": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_1.db",
+            "database_2": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_2.db",
+            "database_3": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_3.db",
         }
-        self.current_database = "database_1" # DATABASE SELECCIONADA, CAMBIAR SEGUN NECESIDAD
+        self.current_database = "database_1"
         self.db = DatabaseHandler(self.db_paths[self.current_database])
-        # Asegúrate de que las tablas existan
-        self.db.create_coordinates_table() 
-        self.db.create_user_requests_table()
 
-        self.current_pose = None
-        self.follower_state = "stopped" # Estado inicial del follower
+        # Estado del follower
+        self.follower_state = "stopped"
         rospy.Subscriber('/follower_state', String, self.follower_state_callback)
 
-        rospy.loginfo("Nodo ChatGPTProcessor iniciado. Esperando mensajes...")
+        # Estado del corridor follower
+        self.corridor_follower_state = "stopped"
+        rospy.Subscriber('/wall_follower_state', String, self.corridor_follower_state_callback)
 
-    def _setup_openai(self):
-        """Configura la API de OpenAI."""
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            rospy.logerr("No se encontró la API Key de OpenAI.")
-            raise RuntimeError("API Key de OpenAI no encontrada.")
-        self.client = OpenAI(api_key=api_key)
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        # Robot Speaker
+        self.speaker = RobotSpeaker()
 
-    def _setup_ros(self):
-        """Configura la suscripción y publicación de ROS."""
-        self.subscription = rospy.Subscriber('/speech_to_text', String, self._process_speech_input)
-        rospy.Subscriber('/amcl_pose', PoseWithCovarianceStamped,
-                     self._amcl_callback, queue_size=1)
-        self.publisher = rospy.Publisher('/turtlebot_single_action', String, queue_size=30)
+        # Proceso del nodo generado
+        self.generated_process = None
 
-    def follower_state_callback(self, msg):
-        self.follower_state = msg.data
+        # Cliente OpenAI
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    def _amcl_callback(self, msg: PoseWithCovarianceStamped):
-        """Guarda la última pose estimada por AMCL en coordenadas del mapa."""
+        # Estado actual
+        self.scan_data = None
+        self.pose = None
+        self.generated_file = "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/scripts/generated_node.py"
+
+        # Suscripciones
+        rospy.Subscriber('/speech_to_text', String, self.handle_user_input)
+        rospy.Subscriber('/scan', LaserScan, self.update_scan)
+        rospy.Subscriber('/odom', Odometry, self.update_pose)
+
+        rospy.loginfo("Nodo ChatGPT inicializado. Esperando solicitudes del usuario...")
+
+    def update_scan(self, msg):
+        self.scan_data = msg
+
+    def update_pose(self, msg):
         pos = msg.pose.pose.position
         ori = msg.pose.pose.orientation
-
-        # Cuaternión → yaw
         q = [ori.x, ori.y, ori.z, ori.w]
         _, _, yaw = tf.transformations.euler_from_quaternion(q)
 
-        self.current_pose = {
+        self.pose = {
             "x": round(pos.x, 2),
             "y": round(pos.y, 2),
             "yaw": round(yaw, 2)
         }
 
-    def _quaternion_to_yaw(self, orientation):
-        q = [orientation.x, orientation.y, orientation.z, orientation.w]
-        _, _, yaw = tf.transformations.euler_from_quaternion(q)
-        return yaw
+    # ----------------- Follower -----------------
+    def follower_state_callback(self, msg):
+        self.follower_state = msg.data
 
-    def _get_actions_from_gpt(self, user_input, places):
-        """Envía la entrada a OpenAI y devuelve la lista de acciones."""
-        # Convertir la lista de lugares en un formato de texto para agregar al prompt
-        places_text = ", ".join(places)
+    # ----------------- Corridor Follower -----------------
+    def corridor_follower_state_callback(self, msg):
+        self.corridor_follower_state = msg.data
 
-        # Obtener historial reciente de interacciones (input + respuesta)
-        recent_interactions = self.db.get_last_n_user_requests()
-        recent_context = []
-        for user_input_text, gpt_response_text, pose_json in recent_interactions:
-            interaction = {
-                "user": user_input_text,
-                "gpt": gpt_response_text
-            }
-            if pose_json:
-                try:
-                    interaction["pose"] = json.loads(pose_json)
-                except json.JSONDecodeError:
-                    rospy.logwarn("Error al decodificar pose_json, se ignorará.")
-            recent_context.append(interaction)
+    def handle_user_input(self, msg):
+        user_input = msg.data
+        rospy.loginfo(f"{YELLOW}Petición recibida: {user_input}{RESET}")
+        rospy.loginfo(f"{YELLOW}estado follow me / corridor follower: {self.follower_state} / {self.corridor_follower_state}{RESET}")
+        prompt = self.build_prompt(user_input, self.follower_state, self.corridor_follower_state)
+        gpt_code = self.query_chatgpt(prompt)
 
-        # Separar la última interacción del resto
-        if recent_context:
-            last_interaction = recent_context[0]
-            previous_interactions = recent_context[1:]
-        else:
-            last_interaction = None
-            previous_interactions = []
+        if gpt_code:
+            if self.save_code(gpt_code):
+                self.db.insert_user_request(user_input, gpt_code, self.serialize_pose())
+                self.run_generated_node()
 
-        historial_json = json.dumps(previous_interactions, ensure_ascii=False, indent=2)
-        last_json = json.dumps(last_interaction, ensure_ascii=False, indent=2) if last_interaction else "{}"
+    def build_prompt(self, user_input, follower_state, corridor_follower_state):
+        # Obtener las últimas 5 interacciones para contexto (petición + pose previa)
+        last_interactions = self.db.get_last_n_user_requests(5)
+        # Construir contexto con especial énfasis en la última interacción
+        contexto_interacciones = ""
+        for i, (req, pose_json) in enumerate(last_interactions, 1):
+            pose_str = pose_json if pose_json else "Posición desconocida"
+            marcador = "(última interacción)" if i == 1 else f"(interacción {i})"
+            contexto_interacciones += f"{marcador}: Petición: \"{req}\", Posición previa del robot: {pose_str}\n"
+        # Obtener lugares almacenados
+        stored_places = self.db.get_all_places()
+        lugares_str = ", ".join(stored_places) if stored_places else "ninguno"
 
-        # Construir el prompt para OpenAI
-        prompt = (
-            "Eres un asistente que convierte instrucciones en lenguaje natural en comandos JSON para un TurtleBot.\n"
-            "Tu salida debe ser siempre estrictamente un **array JSON válido**, sin ningún formato adicional. Esto significa:\n"
-            "- No incluir explicaciones, encabezados como 'Respuesta:', ni bloques de código (como ```json o similares).\n"
-            "- El contenido debe ser solo un array JSON bien formado.\n\n"
+        return f"""
+    Eres un asistente robótico para TurtleBot2 con ROS1 Noetic. Se te dará una solicitud en español y debes generar solo el código completo de un nodo ROS Python3 para que el robot la ejecute.
 
-            "🧷 Reglas estrictas de formato:\n"
-            "- Todas las acciones deben tener un campo obligatorio 'say', que contiene lo que el robot dirá.\n"
-            "- Si no puedes ejecutar directamente la petición, **debes inferir la intención probable del usuario y actuar con sentido común**."
-            "- MUY IMPORTANTE: Si necesitas proponer una alternativa (como seguir al usuario a un lugar desconocido), **debes preguntar primero sin ejecutar ninguna acción todavía**."
-            "- En esos casos, tu salida debe ser únicamente un array con un solo objeto con 'say', y sin ningún campo 'action', hasta que el usuario confirme."
-            "- Solo si el usuario confirma explícitamente (por ejemplo: 'sí', 'hazlo', 'vale'), entonces puedes devolver las acciones necesarias."
-            " Por ejemplo:\n"
-            "  - Si el usuario pide que le traigas algo (como 'tráeme agua' o 've a por unas uvas'), puedes suponer que quiere que vayas a un lugar específico como la cocina.\n"
-            "  - Si ese lugar no está en la base de datos, propón seguir al usuario y guardar la ubicación como 'cocina' (o pregunta si ese es el lugar correcto).\n"
-            "  - No digas simplemente que no sabes hacerlo si puedes hacer algo similar o útil."
-            "- Si parece que te hacen una pregunta, responde únicamente con el campo 'say' y una respuesta adecuada.\n"
-            "- Debes revisar siempre las interacciones anteriores para evitar responder con las mismas palabras.\n"
-            "- El nodo de seguimiento follow me tarda un poco en arrancar, avisa al usuario que espere un momento y que se ponga delante del robot para empezar a caminar, le avisaras cuando este listo.\n"
-            "- Lo mas importante de todo es que mantengas un tono amigable, proactivo e inteligente y jamas repitas la misma respuesta, sé creativo en en el campo'say'.\n\n"
+    === Contexto relevante de interacciones previas ===
 
-            "📌 Ejemplos válidos de salida:\n"
-            "[{\"action\": \"move\", \"distance\": 2, \"velocity\": 0.2, \"say\": \"¡vale, voy!\"}]\n"
-            "[{\"action\": \"go_to_place\", \"place\": \"cocina\", \"say\": \"Voy a la cocina\"}]\n"
-            "[{\"say\": \"No sé cómo ayudarte con eso.\"}]\n"
-            "[{\"action\": \"follow_me\", \"say\": \"Puedo seguirte hasta ese lugar y luego guardarlo, ¿te parece bien?\"}]\n\n"
+    En las últimas peticiones, cada interacción guarda la petición de usuario y la posición previa del robot al ejecutar esa acción.
+    Esta información debe usarse para entender referencias implícitas (como "vale", "haz eso") y para posibles reversiones o ajustes basados en la ubicación previa.
 
-            "🔧 Detalles importantes sobre los comandos:\n"
-            "- 'move': requiere 'distance' (marcha atras = distancia negativa). Puede tener 'velocity' (rango permitido: 0.15 a 0.3). Si no se especifica, usa 0.2.\n"
-            "- 'turn': requiere 'angle' (positivo = derecha, negativo = izquierda). El ángulo mínimo permitido es 15 grados.\n"
-            "- 'add_place' y 'delete_place': requieren 'name'. El nombre debe estar en minúsculas y sin acentos. Se usa para guardar/eliminar ubicaciones en la base de datos.\n"
-            "- 'go_to_place': requiere 'place'. Solo se puede usar con lugares registrados en la base de datos. Los lugares actualmente disponibles son: [" + places_text + "]\n"
-            "- 'explore': requiere 'time_limit'. Si no se especifica, usa 60 segundos por defecto.\n"
-            "- 'follow_me' y 'stop_follow_me': no requieren parámetros. si modo follow = started, en nodo ya esta activo y siguiendo y no hay que hacer nada. si follow = stopped, el nodo esta desactivado y no esta siguiendo. si el seguimiento esta activado, no se puede realizar ninguna otra accion, debes avisar al usuario para desactive el seguimiento si quiere hacer otras cosas.\n"
-            "- 'go_to_coordinates': necesita la 'x', 'y' y 'yaw', se utiliza solo para mover al robot a las coordenadas donde estaba en la última interacción (revertir accion de movimiento). Debes usar las coordenadas de la ultima interaccion que este relacionada con movimiento.\n"
-            "- 'approach_nearest_obstacle': permite al robot acercarse al obstáculo más cercano sin chocar. Acepta opcionalmente 'speed' (por defecto 0.15)\n\n."
+    Últimas 5 interacciones (de más antiguas a más recientes):
+    {contexto_interacciones}
 
-            "🧠 Contexto conversacional:\n"
-            "- Frases como 'claro', 'hazlo', 'adelante', 'vale', 'sí por favor', deben interpretarse como una confirmación de la acción propuesta en la ultima interaccion."
-            "- Usa la última interacción como contexto directo. Las anteriores son menos relevantes pero pueden ayudarte a mantener variedad y coherencia.\n"
-            "- Usa tu intuición para inferir a qué lugar podrían referirse ciertos términos comunes como 'cocina', 'salón', etc. Si ese lugar no está en la base de datos, propón acciones como seguir al usuario y aprender la ubicación.\n\n"
+    === Instrucciones y contexto ===
 
-            f"📎 Última interacción inmediata (muy importante para referencias implícitas):\n{last_json}\n\n"
-            f"📚 Interacciones anteriores (menos relevantes):\n{historial_json}\n\n"
-            f"📚 Estado del modo follow:\n{self.follower_state}\n\n"
-            f"🗣️ Instrucción actual del usuario: '{user_input}'"
-        )
+    - Distingue si la acción está relacionada con el mapa o no:
+    * Acciones relacionadas con el mapa incluyen: navegar a un lugar guardado, ir a coordenadas específicas, añadir o eliminar lugares en la base de datos.
+    * Acciones no relacionadas con el mapa incluyen: movimientos básicos (avanzar, girar), detección y esquiva de obstáculos, control reactivo, etc.
+
+    - Para navegación con mapa, usa las funciones de TurtleBotActions que gestionan la base de datos y navegación automática.
+
+    - El robot tiene almacenados estos lugares conocidos, debes ser capaz de intuir cuando el usuario se refiere a uno de estos lugares: {lugares_str}.
+
+    - Usa el método `say` para comunicarte con el usuario de forma amable y solo cuando sea importante (una vez al principio y otra al final por ejemplo, como veas necesario).
+
+    === Reglas estrictas ===
+
+    - Solo responde con el código Python completo del nodo ROS, sin explicaciones ni texto adicional.
+    - Usa solo comentarios Python si necesitas anotar algo.
+    - Importa siempre: `from TurtleBotActions import TurtleBotActions`
+    - Hay algunas funciones ya implementadas en `TurtleBotActions` que puedes utilizar si las necesitas,tambien puedes crear tus propias funciones si consideras que es necesario.
+    - El robot debe actuar de forma segura y robusta.
+    - Debes proporcionar retroalimentación al usuario mediante el método `say` siempre que lo consideres necesario.
+
+    === Funciones disponibles en TurtleBotActions ===
+
+    - stop()
+    - get_odom_position() -> (x, y, yaw) or None
+    - compute_distance(x0, y0, x1, y1) -> float
+    - move_forward(distance, speed=0.2, obstacle_threshold=0.75) -> bool
+    - move_backward(distance, speed=0.2, obstacle_threshold=0.75) -> bool
+    - rotate(angle_deg, speed=0.5) -> bool
+    - get_front_distance() -> float
+    - get_left_distance() -> float
+    - get_right_distance() -> float
+    - is_obstacle_ahead(threshold=0.75) -> bool
+    - say(text: str)
+    - approach_nearest_obstacle() -> bool
+
+    === Sobre mapas: estas funciones solo sirven cuando el robot tiene un mapa conocido, en caso contrario, comunicar al usuario ===
+    - get_map_position() -> (x, y, yaw) or None
+    - add_place(lugar: str)
+    - delete_place(lugar: str)
+    - go_to_place(place_name: str)
+    - go_to_coordinates(x, y, yaw) # util para volver a una posición previa
+
+    === MODOS DE MOVIMIENTO AUTÓNOMO ===
+
+    El robot tiene dos modos de movimiento autónomo que **no pueden estar activos al mismo tiempo**. Debes controlar estos modos usando los estados proporcionados y comunicar al usuario cualquier restricción o acción redundante.
+
+    1. FOLLOW ME MODE
+    - Propósito: Seguir a una persona automáticamente.
+    - Funciones disponibles: follow_me(), stop_follow_me()
+    - ACTUA EN BASE A ESTE VALOR : follower_state = {follower_state}, no puedes usar este atributo en tu nodo generado ni acceder a el, genera el nodo fiandote de este valor.
+    - MUY IMPORTANTE: Reglas ESTRICTAS de comportamiento:
+      * Si follower_state = 'started' y el usuario quiere activar Follow Me, GENERA UN NODO QUE UNICAMENTE HAGA ESTO:
+        "say": "Ya estaba en modo Follow Me."
+      * Si follower_state = 'stopped' y el usuario quiere desactivar Follow Me, GENERA UN NODO QUE UNICAMENTE HAGA ESTO:
+        "say": "No estaba siguiendote."
+      * Si corridor_follower_state = 'started' y el usuario quiere activar Follow Me, GENERA UN NODO QUE UNICAMENTE HAGA ESTO:
+        "say": "Primero debes desactivar el modo Corridor Follower para poder usar Follow Me."     
+      * Jamas uses follow_me() si follower_state = 'started'.
+      * Jamas uses stop_follow_me() si follower_state = 'stopped'.
+
+    2. WALL / CORRIDOR FOLLOWER MODE
+    - Propósito: Seguir paredes o pasillos automáticamente.
+    - Funciones disponibles: start_corridor_follower(), stop_corridor_follower()
+    - ACTUA EN BASE A ESTE VALOR : follower_state = {corridor_follower_state}, no puedes usar este atributo en tu nodo generado ni acceder a el, genera el nodo fiandote de este valor.
+    - MUY IMPORTANTE: Reglas ESTRICTAS de comportamiento:
+      * Si corridor_follower_state = 'started' y el usuario quiere activar Corridor Follower, GENERA UN NODO QUE UNICAMENTE HAGA ESTO:
+        "say": "Ya estaba siguiendo la pared/pasillo."
+      * Si corridor_follower_state = 'stopped' y el usuario quiere desactivar Corridor Follower, GENERA UN NODO QUE UNICAMENTE HAGA ESTO:
+        "say": "No estaba siguiendo la pared/pasillo."
+      * Si follower_state = 'started' y el usuario quiere activar Corridor Follower, GENERA UN NODO QUE UNICAMENTE HAGA ESTO:
+        "say": "Primero debes desactivar el modo Follow Me para poder usar Corridor Follower."
+      * Jamas uses start_corridor_follower() si corridor_follower_state = 'started'.
+      * Jamas uses stop_corridor_follower() si corridor_follower_state = 'stopped'.
+
+    IMPORTANTE: tanto en el modo Follow Me como en el modo Corridor Follower, si el usuario te pide parar y alguno de estos modos esta activado, debes interpretar que debes desactivar ese modo.
+    
+    === Sensores y tópicos relevantes ===
+
+    - /scan: para detectar obstáculos
+    - /odom: para posición y orientación odométrica
+    - /amcl_pose: para posición y orientación en mapa
+    - /cmd_vel_mux/input/navi: para comandos de movimiento
+    - /move_base_simple/goal: para navegación automática
+
+    === Parámetros operativos ===
+
+    - Velocidad máxima: 0.35 m/s
+    - Distancia mínima segura a obstáculos: 0.75 m
+    - Rango del lidar: -30º a +30º frente al robot. Como el rango es muy limitado, es probable que muchas veces necesites comprobar los datos del lidar mientras vas rotando poco a poco para poder hacer algunas tareas.
+
+    === Petición del usuario ===
+    "{user_input}"
+    """
 
 
+
+    def query_chatgpt(self, prompt):
         try:
             response = self.client.chat.completions.create(
-                model=self.model,
+                model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.7
+                temperature=0.4
             )
-            rospy.loginfo(f"Respuesta GPT sin procesar: {response.choices[0].message.content}")
-            return json.loads(response.choices[0].message.content)
-        except (OpenAIError, json.JSONDecodeError) as e:
-            rospy.logerr(f"Error al obtener acciones de OpenAI: {e}")
-            return []
+            return response.choices[0].message.content
+        except OpenAIError as e:
+            rospy.logerr(f"Error de OpenAI: {e}")
+            return None
         except Exception as e:
-            rospy.logerr(f"Error inesperado: {e}")
-            return []
-        
-    def _publish_actions(self, actions):
-        """Publica cada acción individualmente con una pausa entre ellas."""
-        for action in actions:
-            output_msg = String()
-            output_msg.data = json.dumps(action)
-            self.publisher.publish(output_msg)
-            rospy.loginfo(f"{GREEN}Acción enviada:{RESET} \n{action}")
-            rospy.sleep(1)
+            rospy.logerr(f"Error inesperado al consultar ChatGPT: {e}")
+            return None
 
-    def _process_speech_input(self, msg):
-        """Procesa el mensaje recibido, lo traduce y publica las acciones."""
-        user_input = msg.data.strip().lower()
-        places = self.db.get_all_places()
+    def save_code(self, code):
+        try:
+            # Eliminar marcas de bloque de código Markdown si existen
+            if code.startswith("```"):
+                # Remover las tres comillas y la posible palabra "python"
+                lines = code.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]  # eliminar primera línea
+                if lines[-1].strip() == "```":
+                    lines = lines[:-1]  # eliminar última línea
+                code = "\n".join(lines)
 
-        rospy.loginfo(f"{YELLOW}Procesando mensaje: {user_input}{RESET}")
-        actions = self._get_actions_from_gpt(user_input, places)
-        
-        if actions:
-            gpt_response_json = json.dumps(actions)
-            movimiento_detectado = False
+            with open(self.generated_file, 'w') as f:
+                f.write(code)
+            os.chmod(self.generated_file, 0o755)
+            rospy.loginfo("Código generado guardado correctamente.")
+            return True
+        except Exception as e:
+            rospy.logerr(f"Error al guardar el código: {e}")
+            return False
 
-            for action in actions:
-                action_type = action.get("action")
-                # Detecta si es una acción de movimiento
-                if action_type in ["move", "turn", "go_to_place", "go_to_coordinates", "explore", "follow_me", "approach_nearest_obstacle"]:
-                    movimiento_detectado = True
+    def run_generated_node(self):
+        try:
+            terminal_title = "generated_node_terminal"
 
-            # Guarda interacción en base de datos
-            if movimiento_detectado and self.current_pose:
-                self.db.insert_user_request(user_input, gpt_response_json, pose=self.current_pose)
-            else:
-                self.db.insert_user_request(user_input, gpt_response_json, pose=None)
+            # Cerrar terminales anteriores con el mismo título
+            self.close_terminals_with_title(terminal_title)
 
-            self._publish_actions(actions)
+            # Ejecutar nodo generado en nueva terminal
+            launch_command = f'gnome-terminal --title="{terminal_title}" -- bash -c "python3 {self.generated_file}; exit"'
+            self.generated_process = subprocess.Popen(launch_command, shell=True)
+            rospy.loginfo(f"{GREEN}Nodo generado ejecutado en terminal '{terminal_title}'.{RESET}")
 
-            
+        except Exception as e:
+            rospy.logerr(f"No se pudo ejecutar el nodo generado: {e}")
 
-    def spin(self):
-        """Mantiene el nodo en funcionamiento."""
-        rospy.spin()
+    def close_terminals_with_title(self, title):
+        try:
+            output = subprocess.check_output(['wmctrl', '-l']).decode()
+            for line in output.splitlines():
+                if title in line:
+                    window_id = line.split()[0]
+                    subprocess.call(['wmctrl', '-ic', window_id])
+        except Exception as e:
+            rospy.logwarn(f"No se pudo cerrar terminales con título '{title}': {e}")
+
+
+
+
+    def format_pose(self):
+        if not self.pose:
+            return "Desconocida"
+        p = self.pose.position
+        o = self.pose.orientation
+        return f"x={p.x:.2f}, y={p.y:.2f}, orientación (quat z={o.z:.2f})"
+
+    def format_scan(self):
+        if not self.scan_data:
+            return "Sin datos"
+        mid = len(self.scan_data.ranges) // 2
+        return f"{self.scan_data.ranges[mid]:.2f} metros al frente"
+
+    def serialize_pose(self):
+        if not self.pose:
+            return None
+        return self.pose  # Ya es un diccionario con x, y, yaw
+
 
 if __name__ == "__main__":
-    chatgpt_processor = ChatGPTProcessor()
-    chatgpt_processor.spin()
+    try:
+        ChatGPTNode()
+        rospy.spin()
+    except rospy.ROSInterruptException:
+        pass

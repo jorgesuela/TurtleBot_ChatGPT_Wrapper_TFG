@@ -10,19 +10,24 @@ class DatabaseHandler:
         self.db_path = db_path
         self.lock = threading.Lock()  # Crear un Lock para evitar accesos concurrentes
 
+        # Crear las tablas si no existen al inicializar
+        self.create_coordinates_table()
+        self.create_user_requests_table()
+
     def create_connection(self):
         # Crear una nueva conexión para cada hilo
         return sqlite3.connect(self.db_path)
 
     def create_coordinates_table(self):
-        with self.lock:  # Asegurarse de que solo un hilo acceda a la base de datos a la vez
+        with self.lock:
             conn = self.create_connection()
             cursor = conn.cursor()
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS places (
                     name TEXT PRIMARY KEY,
                     x REAL,
-                    y REAL
+                    y REAL,
+                    yaw REAL
                 )
             ''')
             conn.commit()
@@ -44,14 +49,14 @@ class DatabaseHandler:
             conn.commit()
             conn.close()
 
-    def insert_place(self, name, x, y):
-        with self.lock:  # Asegurarse de que solo un hilo acceda a la base de datos a la vez
+    def insert_place(self, name, x, y, yaw):
+        with self.lock:
             conn = self.create_connection()
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT OR REPLACE INTO places (name, x, y)
-                VALUES (?, ?, ?)
-            ''', (name, x, y))
+                INSERT OR REPLACE INTO places (name, x, y, yaw)
+                VALUES (?, ?, ?, ?)
+            ''', (name, x, y, yaw))
             conn.commit()
             conn.close()
 
@@ -99,15 +104,15 @@ class DatabaseHandler:
             return deleted
 
     def get_place(self, name):
-        with self.lock:  # Asegurarse de que solo un hilo acceda a la base de datos a la vez
+        with self.lock:
             conn = self.create_connection()
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT x, y FROM places WHERE name=?
+                SELECT x, y, yaw FROM places WHERE name=?
             ''', (name,))
             result = cursor.fetchone()
             conn.close()
-            return result
+            return result  # Retorna (x, y, yaw) o None
     
     def get_all_places(self):
         with self.lock:
@@ -123,7 +128,7 @@ class DatabaseHandler:
             conn = self.create_connection()
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT user_input, gpt_response, pose_json FROM user_requests
+                SELECT user_input, pose_json FROM user_requests
                 ORDER BY timestamp DESC LIMIT ?
             ''', (n,))
             result = cursor.fetchall()

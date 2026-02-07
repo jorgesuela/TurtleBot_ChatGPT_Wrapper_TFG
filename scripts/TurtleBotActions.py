@@ -1,200 +1,458 @@
 #!/usr/bin/env python3
 
-# COSAS QUE NO FUNCIONAN: EL FOLLOWER NO VA BIEN EL SSH.
-#bash: /opt/ros/noetic/setup.bash: No such file or directory
-#Connection to 192.168.71.172 closed.
-#Pulsa ENTER para cerrar esta ventana
+# Hay una incompatibilidad entre el amcl node y el follow me, ya que ambos usan la camara y el image to laserscan,
+# como hago para que no den conflicto?
+# lo mejor seria que el amcl se lanzara desde el principio, y que el follow me no lanzara nada que el amcl ya tenga lanzado
+# pero como????
 
-# EL MAPA HAY QUE MEJORARLO, NO SE VE BIEN.
 
-import subprocess
-import time
-from tqdm import tqdm
+import shlex, subprocess, os, signal, time
+from std_msgs.msg import String
+import numpy as np
 import rospy
 import math
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-from nav_msgs.msg import OccupancyGrid
-from actionlib_msgs.msg import GoalStatusArray
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
-from std_msgs.msg import String
+from nav_msgs.msg import Odometry
+from tf.transformations import euler_from_quaternion
 from RobotSpeaker import RobotSpeaker
-import shlex, subprocess, time, rospy
-from std_msgs.msg import String
-import os
-import signal
+from DatabaseHandler import DatabaseHandler
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from nav_msgs.msg import OccupancyGrid
+from std_msgs.msg import Bool
 
 # necesario para el ssh automatico. el nodo follower debe estar corriendo en el robot
 ROBOT_USER = "turtlebot"  # ← usuario del robot
-ROBOT_IP   = "192.168.71.172"
+ROBOT_IP   = "10.152.124.172" # AQUI HAY QUE PONER LA IP DEL ROBOT, CUIDADO QUE CAMBIA
 PASSWORD   = "ros"        # ← contraseña del robot
 
-"""
-CLASE DE ACCIONES DEL TURTLEBOT
-Esta clase contiene métodos para controlar el robot TurtleBot, incluyendo
-movimiento, giro, adición de lugares a una base de datos y exploración inteligente.
-"""
-
 class TurtleBotActions:
-    
-    def __init__(self, db):
-        """
-        Topics:
-        subscribe: /scan, /odom, /map
-        publish: /cmd_vel, /move_base_simple/goal
-        param db: Base de datos para almacenar lugares.
-        """
 
-        # este es el que mueve el robot real: '/teleop_velocity_smoother/raw_cmd_vel'
-        # este es el que mueve el robot gazebo: '/cmd_vel_mux/input/navi'
-        self.db = db
-        self.publisher = rospy.Publisher('/cmd_vel_mux/input/navi', Twist, queue_size=10)
-        self.goal_pub = rospy.Publisher('/move_base_simple/goal', PoseStamped, queue_size=10)  # Nuevo publisher
-        self.pub_state = rospy.Publisher('/follower_state', String, queue_size=10)
-
-        self.current_pose = None            # guardará la última PoseWithCovarianceStamped
+    def __init__(self):
+        self.scan_data = None
         self.map_data = None
-
-        # Inicializar el cliente de sonido
+        self.current_odom_pose = None # coordenadas de odometría
+        self.current_map_pose = None # coordenadas del mapa
         self.speaker = RobotSpeaker()
+        self.camera_process = None  # Para guardar el proceso de la cámara
 
-        # para saber las distancias mínimas en cada dirección
-        self.min_distance = float('inf')
-        self.min_distance_front = float('inf')
-        self.min_distance_left = float('inf')
-        self.min_distance_right = float('inf')
+        # Crear una instancia de DatabaseHandler en el hilo principal
+        self.db_paths = {
+            "database_1": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_1.db", # ESTA DB ES DEL MAPA XXXX
+            "database_2": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_2.db", # ESTA DB ES DEL MAPA XXXX
+            "database_3": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_3.db", # ESTA DB ES DEL MAPA XXXX
+        }
+        self.current_database = "database_1" # DB SELEECCIONADA, CAMBIAR SEGUN NECESIDAD
+        self.db = DatabaseHandler(self.db_paths[self.current_database])
 
-        # Suscripciones
-        rospy.Subscriber("/scan", LaserScan, self.laser_callback)
-        rospy.Subscriber("/amcl_pose", PoseWithCovarianceStamped,
-                         self._amcl_callback, queue_size=1)
+        rospy.Subscriber('/scan', LaserScan, self.update_scan)
+        rospy.Subscriber('/odom', Odometry, self.odom_pose_callback)
+        rospy.Subscriber("/amcl_pose", PoseWithCovarianceStamped, self.map_pose_callback, queue_size=1)
         rospy.Subscriber("/map", OccupancyGrid, self.map_callback)
+        
+        self.cmd_vel_pub = rospy.Publisher('/cmd_vel_mux/input/navi', Twist, queue_size=10)
+        self.goal_pub = rospy.Publisher('/move_base_simple/goal', PoseStamped, queue_size=10)
+        # Suscriptor para publicar el estado del follower
+        self.follower_state_pub = rospy.Publisher('/follower_state', String, queue_size=10)
+        self.wall_follower_state_pub = rospy.Publisher('/wall_follower_state', String, queue_size=10)
 
-        rospy.sleep(1)  # dar tiempo a la conexión con los topics
+        # para el corridor follower:
+        self.wall_follower_enable_pub = rospy.Publisher(
+        "/wall_follower/enable",
+        Bool,
+        queue_size=1,
+        latch=True
+        )
 
-    def _amcl_callback(self, msg: PoseWithCovarianceStamped):
-        """Guarda la última estimación de pose de AMCL."""
-        self.current_pose = msg.pose.pose   
+        rospy.sleep(1.0)
 
-    def laser_callback(self, msg):
-        """Detecta obstáculos en direcciones específicas con frontal estrecho (±15° reales)."""
+    def process_laser_data(self, msg):
+        """
+        Procesa el escaneo láser para obtener distancias mínimas en tres direcciones:
+        frente, izquierda y derecha. Equivalente a laser_callback de la versión original.
+        """
         num_ranges = len(msg.ranges)
-        angle_min = msg.angle_min
-        angle_max = msg.angle_max
         angle_increment = msg.angle_increment
-
-        center_index = num_ranges // 2  # Índice del ángulo 0 rad (frente)
+        center_index = num_ranges // 2
         angle_range_deg = 20
-        offset = int((angle_range_deg * math.pi / 180.0) / angle_increment)  # convertir grados a radianes y luego a pasos
+        offset = int((angle_range_deg * math.pi / 180.0) / angle_increment)
 
-        # Frontal ±15° alrededor del índice central
-        front_indices = msg.ranges[center_index - offset : center_index + offset]
-        left_indices = msg.ranges[int(3*num_ranges/4):]  # 90° a la izquierda
-        right_indices = msg.ranges[:int(num_ranges/4)]  # 90° a la derecha
+        front_indices = msg.ranges[center_index - offset:center_index + offset]
+        left_indices = msg.ranges[int(3 * num_ranges / 4):]
+        right_indices = msg.ranges[:int(num_ranges / 4)]
 
-        # Filtrar distancias válidas
-        self.min_distance_front = min([d for d in front_indices if msg.range_min < d < msg.range_max] or [float('inf')])
-        self.min_distance_left = min([d for d in left_indices if msg.range_min < d < msg.range_max] or [float('inf')])
-        self.min_distance_right = min([d for d in right_indices if msg.range_min < d < msg.range_max] or [float('inf')])
+        def valid_distances(subset):
+            return [d for d in subset if msg.range_min < d < msg.range_max]
+
+        self.min_distance_front = min(valid_distances(front_indices) or [float('inf')])
+        self.min_distance_left = min(valid_distances(left_indices) or [float('inf')])
+        self.min_distance_right = min(valid_distances(right_indices) or [float('inf')])
+
+    def update_scan(self, msg):
+        self.scan_data = msg
+        self.process_laser_data(msg)
 
     def map_callback(self, msg):
         "util para saber que partes del mapa estan exploradas y sin explorar"
         self.map_data = msg
 
-    def move(self, distance, velocity):
-        """
-        Mueve el robot en línea recta una distancia específica a una velocidad dada.
-        :param distance: Distancia en metros a recorrer (positiva hacia adelante, negativa hacia atrás).
-        :param velocity: Velocidad lineal en m/s (debe ser positiva, la dirección se maneja con el signo de distance).
-        """
-        twist = Twist()
-        twist.linear.x = velocity if distance > 0 else -velocity  # Ajustar dirección con el signo de la distancia
-        duration = abs(distance) / velocity  # Calcular tiempo de movimiento
-        
-        self.execute_action(twist, duration)
+    def map_pose_callback(self, msg: PoseWithCovarianceStamped):
+        """Guarda la última estimación de pose de AMCL."""
+        self.current_map_pose = msg.pose.pose
 
-    def turn(self, angle):
-        """
-        Gira el robot a la izquierda o derecha con una velocidad angular constante.
-        :param angle: Ángulo en grados para girar el robot (positivo = derecha, negativo = izquierda).
-        """
-        twist = Twist()
-        
-        angular_speed = 1.0  # rad/s
-        angle_rad = math.radians(abs(angle))  # Convertir grados a radianes
-        duration = angle_rad / angular_speed  # Tiempo necesario para girar
-
-        twist.angular.z = angular_speed if angle < 0 else -angular_speed  
-    
-        self.execute_action(twist, duration)
+    def odom_pose_callback(self, msg):
+        self.current_odom_pose = msg.pose.pose
 
     def stop(self):
         twist = Twist()
-        self.publisher.publish(twist)
+        self.cmd_vel_pub.publish(twist)
 
-    def add_place(self, command):
+    def get_yaw(self, source="odom"):
+        """
+        Devuelve el yaw (orientación en radianes) desde 'odom' o 'map'.
+        :param source: 'odom' o 'map'
+        """
+        pose = None
+        if source == "odom":
+            pose = self.current_odom_pose
+        elif source == "map":
+            pose = self.current_map_pose
+        else:
+            rospy.logwarn(f"Fuente de yaw desconocida: {source}")
+            return 0.0
+
+        if not pose:
+            return 0.0
+
+        q = pose.orientation
+        _, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
+        return yaw
+
+    def get_odom_position(self):
+        """
+        Devuelve la posición (x, y, yaw) usando odometría.
+        """
+        if not self.current_odom_pose:
+            return (0.0, 0.0, 0.0)
+        
+        x = self.current_odom_pose.position.x
+        y = self.current_odom_pose.position.y
+        yaw = self.get_yaw(source="odom")
+        return (x, y, yaw)
+    
+    def get_map_position(self):
+        if self.current_map_pose is None:
+            return None
+        x = self.current_map_pose.position.x
+        y = self.current_map_pose.position.y
+        yaw = self.get_yaw(source="map")
+        return (x, y, yaw)
+
+    def compute_distance(self, x0, y0, x1, y1):
+        return math.sqrt((x1 - x0)**2 + (y1 - y0)**2)
+
+    def move_forward(self, distance, speed=0.2, obstacle_threshold=0.7):
+        if speed > 0.35:
+            speed = 0.35
+        if not self.current_odom_pose:
+            rospy.logwarn("No hay datos de odometría.")
+            return False
+
+        x_start, y_start, _ = self.get_odom_position()
+        twist = Twist()
+
+        rate = rospy.Rate(10)
+        while not rospy.is_shutdown():
+            front_dist = self.get_front_distance()
+
+            if front_dist < obstacle_threshold:
+                self.stop()
+                rospy.logwarn(f"Obstáculo detectado a {front_dist:.2f} m, deteniendo avance antes de {distance} m.")
+                return False
+
+            x_now, y_now, _ = self.get_odom_position()
+            moved = self.compute_distance(x_start, y_start, x_now, y_now)
+            if moved >= distance:
+                break
+
+            if front_dist < obstacle_threshold + 0.1:
+                adjusted_speed = max(0.05, speed * (front_dist / (obstacle_threshold + 0.1)))
+                twist.linear.x = adjusted_speed
+            else:
+                twist.linear.x = speed
+
+            self.cmd_vel_pub.publish(twist)
+            rate.sleep()
+
+        self.stop()
+        return True
+    
+    def move_backward(self, distance, speed=0.2):
+        """
+        Mueve el robot hacia atrás hasta la distancia indicada.
+        No hay protección contra obstáculos traseros porque el LIDAR solo cubre 60° frontales.
+        """
+        if speed > 0.35:
+            speed = 0.35
+
+        if not self.current_odom_pose:
+            rospy.logwarn("No hay datos de odometría.")
+            return False
+
+        x_start, y_start, _ = self.get_odom_position()
+        twist = Twist()
+
+        rate = rospy.Rate(10)
+        last_distance = None
+        no_change_counter = 0
+        max_no_change = 10
+
+        while not rospy.is_shutdown():
+            # Calcular distancia recorrida
+            x_now, y_now, _ = self.get_odom_position()
+            moved = self.compute_distance(x_start, y_start, x_now, y_now)
+
+            if moved >= distance:
+                break
+
+            # Aplicar velocidad hacia atrás
+            twist.linear.x = -abs(speed)
+            self.cmd_vel_pub.publish(twist)
+
+            # Protección contra atasco (pequeña distancia recorrida)
+            if last_distance is not None and abs(moved - last_distance) < 0.001:
+                no_change_counter += 1
+                if no_change_counter >= max_no_change:
+                    rospy.logwarn("El robot parece atascado durante retroceso. Abortando movimiento.")
+                    self.stop()
+                    return False
+            else:
+                no_change_counter = 0
+
+            last_distance = moved
+            rate.sleep()
+
+        self.stop()
+        return True
+
+    def rotate(self, angle_deg, speed=0.5):
+        if speed > 1.0:
+            speed = 1.0
+        if not self.current_odom_pose:
+            rospy.logwarn("No hay datos de odometría.")
+            return False
+
+        angle_rad = math.radians(angle_deg)
+        direction = 1.0 if angle_rad > 0 else -1.0
+        twist = Twist()
+        twist.angular.z = direction * abs(speed)
+
+        yaw_prev = self.get_yaw("odom")
+        angle_moved = 0.0
+
+        rate = rospy.Rate(20)
+        while not rospy.is_shutdown():
+            current_yaw = self.get_yaw("odom")
+            delta = self.normalize_angle(current_yaw - yaw_prev)
+            angle_moved += delta
+            yaw_prev = current_yaw
+
+            if abs(angle_moved) >= abs(angle_rad):
+                break
+
+            self.cmd_vel_pub.publish(twist)
+            rate.sleep()
+
+        self.stop()
+        return True
+
+    def normalize_angle(self, angle):
+        return math.atan2(math.sin(angle), math.cos(angle))
+
+    def get_scan_angle_distance(self, target_angle_deg, window=5):
+        """Esta función devuelve la distancia promedio medida por el LiDAR hacia un ángulo específico"""
+        if not self.scan_data:
+            return float('inf')
+
+        angle_rad = math.radians(target_angle_deg)
+        index = int(round((angle_rad - self.scan_data.angle_min) / self.scan_data.angle_increment))
+
+        if index < 0 or index >= len(self.scan_data.ranges):
+            return float('inf')
+
+        start = max(0, index - window)
+        end = min(len(self.scan_data.ranges), index + window + 1)
+        values = [r for r in self.scan_data.ranges[start:end] if not math.isinf(r) and not math.isnan(r)]
+
+        if not values:
+            return float('inf')
+
+        return sum(values) / len(values)
+
+    def get_front_distance(self):
+        return self.get_scan_angle_distance(0)
+
+    def get_right_distance(self):
+        if not self.scan_data:
+            return float('inf')
+        right_deg = math.degrees(self.scan_data.angle_min)
+        return self.get_scan_angle_distance(right_deg)
+
+    def get_left_distance(self):
+        if not self.scan_data:
+            return float('inf')
+        left_deg = math.degrees(self.scan_data.angle_max)
+        return self.get_scan_angle_distance(left_deg)
+
+    def is_obstacle_ahead(self, threshold=0.7):
+        return self.get_front_distance() < threshold
+    
+    def approach_nearest_obstacle(self, safe_distance=0.75):
+        """
+        Busca el obstáculo más cercano, se orienta hacia él,
+        lo centra finamente y se aproxima hasta una distancia segura.
+        Implementado como máquina de estados simple.
+        """
+
+        rospy.loginfo("=== APPROACH: buscando obstáculo ===")
+
+        # ---------- STATE: FIND ----------
+        try:
+            scan = rospy.wait_for_message("/scan", LaserScan, timeout=3.0)
+        except rospy.ROSException:
+            rospy.logwarn("No se recibió LIDAR.")
+            return False
+
+        valid = [(i, d) for i, d in enumerate(scan.ranges)
+                if scan.range_min < d < scan.range_max]
+
+        if not valid:
+            rospy.logwarn("No hay obstáculos detectables.")
+            return False
+
+        min_idx, min_dist = min(valid, key=lambda x: x[1])
+        target_angle = scan.angle_min + min_idx * scan.angle_increment
+        target_angle_deg = math.degrees(target_angle)
+
+        rospy.loginfo(
+            f"Obstáculo a {min_dist:.2f} m, ángulo {target_angle_deg:.1f}°"
+        )
+
+        # ---------- STATE: TURN ----------
+        if not self.rotate(target_angle_deg):
+            rospy.logwarn("Fallo en rotación inicial.")
+            return False
+
+        rospy.sleep(0.2)  # dejar estabilizar el scan
+
+        # ---------- STATE: ALIGN ----------
+        align_start = rospy.Time.now()
+        align_timeout = rospy.Duration(5.0)
+
+        rate = rospy.Rate(10)
+        twist = Twist()
+
+        while not rospy.is_shutdown():
+            front = self.get_front_distance()
+            left = self.get_scan_angle_distance(5)
+            right = self.get_scan_angle_distance(-5)
+
+            if not math.isinf(front):
+                break  # ya lo tenemos centrado
+
+            # Girar hacia donde esté más cerca
+            if left < right:
+                twist.angular.z = 0.25
+            else:
+                twist.angular.z = -0.25
+
+            self.cmd_vel_pub.publish(twist)
+
+            if rospy.Time.now() - align_start > align_timeout:
+                rospy.logwarn("Timeout alineando obstáculo.")
+                self.stop()
+                return False
+
+            rate.sleep()
+
+        self.stop()
+        rospy.loginfo("Obstáculo alineado.")
+
+        # ---------- STATE: APPROACH ----------
+        approach_start = rospy.Time.now()
+        approach_timeout = rospy.Duration(10.0)
+
+        while not rospy.is_shutdown():
+            front = self.get_front_distance()
+
+            if math.isnan(front):
+                rospy.logwarn("Lectura NaN durante aproximación.")
+                self.stop()
+                return False
+
+            if front <= safe_distance:
+                rospy.loginfo(
+                    f"Distancia segura alcanzada ({front:.2f} m)."
+                )
+                self.stop()
+                return True
+
+            if rospy.Time.now() - approach_start > approach_timeout:
+                rospy.logwarn("Timeout aproximándose al obstáculo.")
+                self.stop()
+                return False
+
+            # Velocidad proporcional
+            twist.linear.x = 0.2   # velocidad constante
+            twist.angular.z = 0.0
+            self.cmd_vel_pub.publish(twist)
+
+            rate.sleep()
+
+        self.stop()
+        return False
+
+    def say(self, text):
+        self.speaker.say(text)
+
+    # FUNCIONES DE NAVEGACION AUTOMATIZADA CON MAPA (solo funcionan si hay mapa conocido)
+    
+    def add_place(self, lugar):
         """
         Añade un nuevo lugar a la base de datos. 
-        Utiliza las coordenadas actuales del robot.
+        Utiliza las coordenadas actuales del mapa (AMCL).
         """
-        # Este tiempo es para asegurar que el robot ya no está moviéndose antes de guardar la ubicación
-        rospy.sleep(2)
-        name = command.get("name")
-        
-        # Si la pose actual no está disponible, no podemos añadir el lugar
-        if self.current_pose is None:
-            rospy.logwarn("No se pudo obtener las coordenadas del robot. Asegúrate de que el robot esté publicando odometría.")
+        rospy.sleep(1.0)
+
+        position = self.get_map_position()
+        if position is None:
+            rospy.logwarn("No se puede añadir lugar: no hay datos de pose del mapa.")
             return
+        x, y, yaw = position
+        x = round(x, 2)
+        y = round(y, 2)
+        yaw = round(yaw, 2)
 
-        x = round(self.current_pose.position.x, 2)
-        y = round(self.current_pose.position.y, 2)
-        
-        if name:
-            try:
-                self.db.insert_place(name, x, y)
-                rospy.loginfo(f"Nuevo lugar añadido: {name} en las coordenadas ({x}, {y}).")
-            except Exception as e:
-                rospy.logerr(f"Error al añadir lugar: {e}")
-        else:
-            rospy.logwarn("Faltan parámetros para añadir el lugar. Asegúrate de incluir nombre.")
+        self.db.insert_place(lugar, x, y, yaw)
+        rospy.loginfo(f"se ha añadido '{lugar}' a la base de datos.")
 
-    def delete_place(self, command):
+    def delete_place(self, lugar):
         """
         Elimina un lugar de la base de datos si existe.
-        :param place_name: Nombre del lugar a eliminar.
+        :param lugar: Nombre del lugar a eliminar.
         """
-        place_name = command.get("name")
-        try:
-            result = self.db.delete_place(place_name)
-            if result:
-                rospy.loginfo(self.db.get_all_places())  # debe incluir 'test_place'
-                rospy.loginfo(f"Lugar '{place_name}' eliminado de la base de datos.")
-            else:
-                rospy.logwarn(f"No se encontró el lugar '{place_name}' en la base de datos.")
-        except Exception as e:
-            rospy.logerr(f"Error al eliminar el lugar: {e}")
-
-    def get_robot_position(self):
-        """Devuelve (x, y, yaw) de la última pose AMCL, o None si aún no hay dato."""
-        if self.amcl_pose is None:
-            return None
-
-        x = self.amcl_pose.position.x
-        y = self.amcl_pose.position.y
-
-        # convierte el quaternion a yaw
-        import tf.transformations as tft
-        q = self.amcl_pose.orientation
-        _, _, yaw = tft.euler_from_quaternion([q.x, q.y, q.z, q.w])
-
-        return (x, y, yaw)
+        result = self.db.delete_place(lugar)
+        
+        if result:
+            rospy.loginfo(f"Lugar '{lugar}' eliminado de la base de datos.")
+        else:
+            rospy.logwarn(f"No se encontró el lugar '{lugar}' en la base de datos.")
 
     def has_arrived(self, goal_x, goal_y, tolerance=0.3):
         """
         Este método comprueba si el robot ha llegado a la meta.
         """
-        pos = self.get_robot_position()
+        pos = self.get_map_position()
         if pos is None:
             return False
         dx = goal_x - pos[0]
@@ -209,8 +467,8 @@ class TurtleBotActions:
             rospy.logwarn(f"Lugar '{place_name}' no encontrado en la base de datos.")
             return
 
-        x, y = place
-        self._go_to_target(x, y, yaw=0.0, destination_name=place_name)
+        x, y, yaw = place
+        self._go_to_target(x, y, yaw, destination_name=place_name)
 
     def go_to_coordinates(self, x, y, yaw=0.0):
         self._go_to_target(x, y, yaw)
@@ -247,53 +505,8 @@ class TurtleBotActions:
 
         rospy.logwarn("El robot no llegó a la meta dentro del tiempo esperado.")
 
-    def custom_recovery(self):
-        if self.min_distance_front < 0.35:
-            self.move(-0.1, 0.2)  # Retrocede ligeramente
-            if self.min_distance_left < self.min_distance_right:
-                self.turn(45)
-            else:
-                self.turn(-45)
-        else:
-            self.move(0.1, 0.2)  # Avanza en línea recta con velocidad optimizada     
+######## PENDIENTES DE REVISION!!!! ########
 
-    def smart_exploration(self, time_limit):
-        """
-        Explora de forma inteligente usando explore_lite durante un tiempo determinado.
-        Termina anticipadamente si no hay metas activas durante al menos 5 segundos seguidos.
-        """
-        finalizado_antes_de_tiempo = False
-        self.last_goal_time = time.time()
-
-        def status_callback(msg):
-            # Reiniciamos el temporizador si hay alguna meta activa o pendiente
-            if any(status.status in [0, 1] for status in msg.status_list):  # PENDING or ACTIVE
-                self.last_goal_time = time.time()
-
-        rospy.Subscriber("/move_base/status", GoalStatusArray, status_callback)
-
-        # Lanzar explore_lite
-        explore_cmd = f"gnome-terminal -- bash -c \"roslaunch explore_lite explore.launch; exec bash\""
-        subprocess.Popen(explore_cmd, shell=True)
-        rospy.loginfo("Exploración iniciada. Esperando a que se publiquen fronteras...")
-
-        time.sleep(5)  # Espera inicial para que explore_lite publique su primera meta
-
-        # Bucle con barra de progreso
-        for _ in tqdm(range(time_limit), desc="Explorando", ncols=70):
-            if time.time() - self.last_goal_time > 5.0:
-                finalizado_antes_de_tiempo = True
-                break
-            time.sleep(1)
-
-        # Terminar exploración
-        subprocess.call("pkill -f explore.launch", shell=True)
-        if finalizado_antes_de_tiempo:
-            rospy.loginfo("No se encontraron mas zonas inexploradas!")
-        rospy.loginfo("Exploración terminada.")
-
-    # ------------- NECESARIO PARA EL FOLLOWER -----------------
-    
     def _ssh_command(self):
         """Comando base ssh con sshpass."""
         return (
@@ -303,70 +516,67 @@ class TurtleBotActions:
         )
 
     def _running_remote(self) -> bool:
-        """True si follower.launch vive en el robot."""
+        """True si follower.launch está corriendo en el robot remoto."""
         chk = subprocess.run(
-            f"{self._ssh_command()} pgrep -fa follower.launch",
+            f"{self._ssh_command()} pgrep -fa follower",
             shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
         )
         return bool(chk.stdout.strip())
 
     def follow_me(self):
-        rospy.loginfo("Activando 'Follow Me' (ventana SSH)...")
+        """
+        Lanza el modo 'Follow Me' en el robot remoto.
+        Antes detiene la cámara local para evitar conflictos.
+        """
+        rospy.loginfo("Activando 'Follow Me'...")
 
+        # Detener la cámara si está corriendo
+        self.stop_camera()
+
+        # Probar SSH
         try:
             result = subprocess.run(
-                f"{self._ssh_command()} echo ok", shell=True,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10
+                f"{self._ssh_command()} echo ok",
+                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10
             )
             if result.returncode != 0:
-                rospy.logerr("SSH inaccesible → abortando.")
-                self.speaker.say("No puedo conectar con el robot. Asegúrate de que está encendido y conectado a la red.")
+                rospy.logerr("No se pudo conectar vía SSH al robot.")
+                self.speaker.say("No puedo conectar con el robot. Verifica que está encendido y conectado.")
                 return
-        except subprocess.TimeoutExpired:
-            rospy.logerr("SSH timeout → abortando.")
-            self.speaker.say("No puedo conectar con el robot. La conexión ha expirado.")
-            return
         except Exception as e:
-            rospy.logerr(f"Error inesperado al probar SSH: {e}")
+            rospy.logerr(f"Error al probar SSH: {e}")
             self.speaker.say("Error inesperado al intentar conectar con el robot.")
             return
 
-        # Comando remoto con setup y roslaunch, como en tu script funcional
-        remote_cmd = (
-            "source /opt/ros/noetic/setup.bash && "
-            "source ~/catkin_ws/devel/setup.bash && "
-            "roslaunch turtlebot_follower follower.launch"
-        )
-        remote_escaped = shlex.quote(remote_cmd)
+        # Comando para abrir terminal y ejecutar el script remoto
+        term_cmd = [
+            "gnome-terminal", "--", "bash", "-c",
+            f"{self._ssh_command()} '~/jorge/scripts/launch_follower.sh'"
+        ]
 
-        # Construimos el comando completo para abrir gnome-terminal
-        full_cmd = f"{self._ssh_command()} {remote_escaped}"
+        # Lanzar la terminal
+        self.term_proc = subprocess.Popen(term_cmd, preexec_fn=os.setsid)
+        rospy.loginfo("Terminal lanzada con el nodo follower. Esperando inicialización...")
+        time.sleep(5)  # esperar a que el follower se inicie
 
-        term_cmd = (
-            f"gnome-terminal -- bash -c "
-            f"\"{full_cmd}; echo 'Pulsa ENTER para cerrar esta ventana'; read linea\""
-        )
-
-        rospy.loginfo("Lanzando terminal con el nodo follower")
-        self.term_proc = subprocess.Popen(term_cmd, shell=True, preexec_fn=os.setsid)
-
-        # Esperamos un poco para que el follower se inicie
-        time.sleep(5)
-
+        # Comprobar si se está ejecutando el follower en el robot
         if self._running_remote():
-            self.pub_state.publish("started")
+            self.follower_state_pub.publish("started")
             rospy.loginfo("'Follow Me' activo.")
             self.speaker.say("Modo seguimiento activado. Ya puedes caminar.")
         else:
             rospy.logerr("El follower no arrancó. Cerrando ventana.")
-            self.speaker.say("No se pudo activar 'Follow Me'. Asegúrate de que el robot está listo.")
+            self.speaker.say("No se pudo activar 'Follow Me'. Verifica que el robot está listo.")
             if self.term_proc.poll() is None:
                 self.term_proc.terminate()
 
     def stop_follow_me(self):
+        """
+        Detiene el modo 'Follow Me' en el robot remoto y reinicia la cámara local.
+        """
         rospy.loginfo("Deteniendo 'Follow Me'...")
 
-        # Mata el nodo follower en el robot
+        # Mata el nodo follower remoto
         subprocess.run(
             f"{self._ssh_command()} pkill -f follower.launch",
             shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10
@@ -380,84 +590,88 @@ class TurtleBotActions:
             except subprocess.TimeoutExpired:
                 self.term_proc.kill()
 
-        self.pub_state.publish("stopped")
+        # Actualiza estado y reinicia cámara
+        self.follower_state_pub.publish("stopped")
         rospy.loginfo("'Follow Me' detenido.")
+        self.start_camera()
+        rospy.loginfo("Cámara reiniciada.")
 
-    def approach_nearest_obstacle(self, safe_distance=0.8, speed=0.15):
+
+# HACEN FALTA PARA QUE EL FOLLOWER NO ROMPA EL ROBOT (camara y follower no pueden ir a la vez)
+    def start_camera(self):
         """
-        Gira hacia el obstáculo más cercano y se aproxima hasta mantener una distancia segura.
-        Detiene el avance si pierde la lectura o detecta que está demasiado cerca.
+        Lanza el nodo de la cámara ASTRA en el robot vía SSH.
+        Evita abrir terminales locales y asegura que no se queden procesos zombies.
         """
-        rospy.loginfo("Buscando el obstáculo más cercano...")
+        if getattr(self, "camera_process", None) and self.camera_process.poll() is None:
+            rospy.loginfo("La cámara ya está ejecutándose en el robot.")
+            return
 
-        last_distance = None
-        no_change_counter = 0
-        max_no_change = 5  # Máximo número de ciclos sin progreso
+        rospy.loginfo("Iniciando nodo de cámara ASTRA en el robot...")
+        remote_cmd = (
+            "bash -c '"
+            "source /opt/ros/kinetic/setup.bash && "
+            "source ~/catkin_ws/devel/setup.bash && "
+            "roslaunch astra_launch astra.launch'"
+        )
+        remote_escaped = shlex.quote(remote_cmd)
+        full_cmd = f"{self._ssh_command()} {remote_escaped}"
 
+        # Lanzar el nodo remoto en background sin abrir terminal
+        self.camera_process = subprocess.Popen(
+            full_cmd,
+            shell=True,
+            preexec_fn=os.setsid,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
 
+        # Esperar un momento para que el nodo arranque
+        time.sleep(2)
+        rospy.loginfo("Nodo de cámara lanzado en el robot vía SSH.")
+
+    def stop_camera(self):
+        """
+        Detiene el nodo de cámara en el robot y cierra el proceso local.
+        """
+        rospy.loginfo("Deteniendo nodo de cámara en el robot...")
         try:
-            scan_msg = rospy.wait_for_message("/scan", LaserScan, timeout=5.0)
-        except rospy.ROSException:
-            rospy.logwarn("No se pudieron obtener datos del láser.")
-            return
+            subprocess.run(
+                f"{self._ssh_command()} pkill -f astra.launch",
+                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5
+            )
+            rospy.loginfo("Nodo de cámara detenido correctamente en el robot.")
+        except subprocess.TimeoutExpired:
+            rospy.logwarn("No se pudo detener el nodo de cámara a tiempo.")
+        except Exception as e:
+            rospy.logerr(f"Error al detener la cámara: {e}")
 
-        valid_ranges = [
-            (i, dist) for i, dist in enumerate(scan_msg.ranges)
-            if scan_msg.range_min < dist < scan_msg.range_max
-        ]
+        # Limpiar el proceso local
+        if getattr(self, "camera_process", None):
+            if self.camera_process.poll() is None:
+                try:
+                    os.killpg(os.getpgid(self.camera_process.pid), signal.SIGTERM)
+                    self.camera_process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    rospy.logwarn("Proceso local de cámara no respondió a SIGTERM. Forzando cierre...")
+                    self.camera_process.kill()
+                except Exception as e:
+                    rospy.logerr(f"Error al cerrar proceso local de cámara: {e}")
+            self.camera_process = None
 
-        if not valid_ranges:
-            rospy.logwarn("No se detectaron obstáculos válidos.")
-            return
+# ESTO TIENE UN FALLO, NO SE CIERRA BIEN EL NODO
 
-        min_index, min_dist = min(valid_ranges, key=lambda x: x[1])
-        angle_to_turn = scan_msg.angle_min + min_index * scan_msg.angle_increment
-        angle_degrees = math.degrees(angle_to_turn)
+    def start_corridor_follower(self):
+        rospy.loginfo("Activando Wall Follower...")
+        self.wall_follower_enable_pub.publish(True)
+        self.wall_follower_state_pub.publish("started")
 
-        rospy.loginfo(f"Obstáculo más cercano a {min_dist:.2f} m, ángulo: {angle_degrees:.1f}°")
-        #alinear el robot hacia el obstáculo más cercano
-        self.turn(-angle_degrees)
-
-        twist = Twist()
-        twist.linear.x = speed
-        step_duration = 0.15  # avanzar en pequeños pasos
-        rate = rospy.Rate(10)
-
-        while not rospy.is_shutdown():
-            # Protección: si la lectura se vuelve inválida
-            if not (0.0 < self.min_distance_front < float('inf')):
-                rospy.logwarn("Distancia frontal inválida. Deteniendo por seguridad.")
-                break
-
-            if self.min_distance_front <= safe_distance:
-                rospy.loginfo("Distancia segura alcanzada. Deteniendo.")
-                break
-
-            # Detección de atasco si la distancia no cambia significativamente
-            avg_front_distance = self.min_distance_front
-
-            if last_distance and abs(avg_front_distance - last_distance) < 0.01:
-                no_change_counter += 1
-                if no_change_counter >= max_no_change:
-                    rospy.logwarn("El robot parece atascado. Abortando acercamiento.")
-                    self.speaker.say("Me he quedado atascado.")
-                    break
-            else:
-                no_change_counter = 0
-
-            last_distance = avg_front_distance
-            self.execute_action(twist, step_duration)
-            rate.sleep()
-
+    def stop_corridor_follower(self):
+        rospy.loginfo("Deteniendo Wall Follower...")
+        self.wall_follower_enable_pub.publish(False)
         self.stop()
-        self.speaker.say("Distancia segura alcanzada. He llegado.")
-        
-    def execute_action(self, twist, duration):
-        rate = rospy.Rate(10)  # 10 Hz
-        start_time = rospy.Time.now().to_sec()
+        self.wall_follower_state_pub.publish("stopped")
 
-        while (rospy.Time.now().to_sec() - start_time) < duration:
-            self.publisher.publish(twist)
-            rate.sleep()
 
-        self.stop()  # Detener el robot después del tiempo especificado
+
+

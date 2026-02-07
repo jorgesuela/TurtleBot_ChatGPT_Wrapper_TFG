@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""
+Wall Follower TurtleBot2 con LiDAR limitado a ±30°
+Estimación de distancia lateral usando trigonometría.
+Evita NaN y movimientos bruscos.
+Autor: Jorge
+"""
+
+import rospy
+from geometry_msgs.msg import Twist
+from sensor_msgs.msg import LaserScan
+import numpy as np
+import math
+
+class PIDController:
+    def __init__(self, kp, ki, kd, output_limit=None):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.prev_error = 0.0
+        self.integral = 0.0
+        self.output_limit = output_limit
+
+    def compute(self, setpoint, measured_value, dt):
+        error = setpoint - measured_value
+        self.integral += error * dt
+        derivative = (error - self.prev_error) / max(dt, 1e-3)
+        output = self.kp * error + self.ki * self.integral + self.kd * derivative
+        self.prev_error = error
+        if self.output_limit is not None:
+            output = np.clip(output, -self.output_limit, self.output_limit)
+        if not np.isfinite(output):
+            output = 0.0
+        return output
+
+class WallFollowerNode:
+    def __init__(self):
+        rospy.init_node('wall_follower_node')
+
+        # Parámetros
+        self.obstacle_distance = rospy.get_param('~obstacle_distance', 0.5)
+        self.forward_speed = rospy.get_param('~forward_speed', 0.12)  # más lento para seguridad
+        self.max_angular_speed = rospy.get_param('~max_angular_speed', 0.5)
+        self.side = rospy.get_param('~side', 'left')  # 'left' o 'right'
+        self.tolerance = rospy.get_param('~tolerance', 0.05)
+
+        self.laser_sub = rospy.Subscriber('/scan', LaserScan, self.laser_callback)
+        self.cmd_vel_pub = rospy.Publisher('/cmd_vel_mux/input/navi', Twist, queue_size=10)
+
+        # PID con ganancia más alta para respuesta rápida
+        self.pid = PIDController(kp=1.5, ki=0.0, kd=0.1, output_limit=self.max_angular_speed)
+        self.prev_time = rospy.Time.now()
+
+        rospy.loginfo("Nodo Wall Follower inicializado con estimación lateral")
+
+    def laser_callback(self, msg):
+        cmd = Twist()
+        num_ranges = len(msg.ranges)
+        angles = [msg.angle_min + i * msg.angle_increment for i in range(num_ranges)]
+
+        # Seleccionar rayos frontales (±30°)
+        front_mask = [abs(math.degrees(a)) <= 30 for a in angles]
+        front_ranges = [r if np.isfinite(r) else float('inf') for r, m in zip(msg.ranges, front_mask) if m]
+
+        if not front_ranges:
+            rospy.logwarn("No hay lecturas frontales válidas.")
+            cmd.linear.x = 0.0
+            cmd.angular.z = 0.0
+            self.cmd_vel_pub.publish(cmd)
+            return
+
+        # Distancia frontal mínima
+        front_dist = min(front_ranges)
+
+        # Estimar distancia lateral usando trigonometría
+        lateral_angles_deg = [20, 25, 30]  # rayos que miran hacia la pared
+        if self.side == 'right':
+            lateral_angles_deg = [-a for a in lateral_angles_deg]
+
+        lateral_distances = []
+        for deg in lateral_angles_deg:
+            rad = math.radians(deg)
+            index = int(round((rad - msg.angle_min) / msg.angle_increment))
+            if 0 <= index < num_ranges and np.isfinite(msg.ranges[index]):
+                lateral_distances.append(msg.ranges[index] * math.sin(abs(rad)))
+
+        # Promedio de distancias laterales proyectadas
+        side_dist = np.mean(lateral_distances) if lateral_distances else float('inf')
+
+        current_time = rospy.Time.now()
+        dt = (current_time - self.prev_time).to_sec()
+        self.prev_time = current_time
+
+        follow_distance = self.obstacle_distance + 0.15
+
+        if front_dist < self.obstacle_distance:
+            cmd.linear.x = 0.0
+            cmd.angular.z = self.max_angular_speed if self.side == 'left' else -self.max_angular_speed
+        else:
+            if not np.isfinite(side_dist):
+                side_dist = self.obstacle_distance
+
+            # Zona de tolerancia
+            if abs(side_dist - self.obstacle_distance) < self.tolerance:
+                error = 0.0
+            else:
+                error = follow_distance - side_dist
+                error = np.clip(error, -follow_distance, follow_distance)
+
+            cmd.linear.x = self.forward_speed
+            cmd.angular.z = self.pid.compute(0, error, dt)
+
+        # Prevenir NaN
+        if not np.isfinite(cmd.linear.x):
+            cmd.linear.x = 0.0
+        if not np.isfinite(cmd.angular.z):
+            cmd.angular.z = 0.0
+
+        cmd.linear.x = np.clip(cmd.linear.x, 0.0, self.forward_speed)
+        cmd.angular.z = np.clip(cmd.angular.z, -self.max_angular_speed, self.max_angular_speed)
+
+        self.cmd_vel_pub.publish(cmd)
+
+if __name__ == '__main__':
+    try:
+        node = WallFollowerNode()
+        rospy.spin()
+    except rospy.ROSInterruptException:
+        pass
