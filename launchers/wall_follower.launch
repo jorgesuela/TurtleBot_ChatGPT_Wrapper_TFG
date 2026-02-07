@@ -1,0 +1,4 @@
+<launch>
+    <node pkg="cisc_turtlebot_chatgpt_wrapper" type="wall_follower_node.py" name="wall_follower_node" output="screen"/>
+</launch>
+
