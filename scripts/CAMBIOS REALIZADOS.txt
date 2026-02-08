@@ -1,7 +1,0 @@
-SE HAN HECHO LOS SIGUIENTES CAMBIOS:
-- nuevo punto en la memoria, comparacion RISC vs CISC
-- se ha cambiado a arquitectura CISC, hay que cambiar la memoria 
-- se prescinde del nodo de control, que antes recibia la lista de instrucciones que debia
-realizar y las iba ejecutando de 1 en 1.
-- ahora lo que sucede es que chatgpt ejecuta su propio nodo con su propio codigo sin restriccion ninguna,
-ya no es solo un planificador, sino que ahora crea, planifica y ejecuta.
