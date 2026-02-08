@@ -1,0 +1,8 @@
+1. conectar el robot y el portatil a la misma red (la del movil por ejemplo)
+2. comprobar IP y ponerlas en el bashrc del robot y del portatil:
+    - en el robot: hay que poner la ip del robot en los 3
+    - en el portatil: la ip del robot en ros_master_uri y en los otros 2 la del portatil
+3. guardar y cerrar la terminal
+4. cambiar la ip del robot en turtlebot_actions si hubiera cambiado
+5. ejecutar en el robot el minimal y el amcl (no se si hace falta la camara, creo que no)
+6. lanzar el script del portatil

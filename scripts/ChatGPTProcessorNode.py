@@ -16,6 +16,7 @@ YELLOW = "\033[93m"
 RESET = "\033[0m"
 
 class ChatGPTNode:
+
     def __init__(self):
         rospy.init_node('chatgpt_node', anonymous=True)
 
@@ -25,6 +26,7 @@ class ChatGPTNode:
             "database_2": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_2.db",
             "database_3": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_3.db",
         }
+        # Seleccionar la base de datos activa (segun el mapa que este cargado)
         self.current_database = "database_1"
         self.db = DatabaseHandler(self.db_paths[self.current_database])
 
@@ -48,14 +50,18 @@ class ChatGPTNode:
         # Estado actual
         self.scan_data = None
         self.pose = None
+
+        # Archivo para guardar y ejecutar el código generado por ChatGPT
         self.generated_file = "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/scripts/generated_node.py"
 
-        # Suscripciones
+        # Suscriptores
         rospy.Subscriber('/speech_to_text', String, self.handle_user_input)
         rospy.Subscriber('/scan', LaserScan, self.update_scan)
         rospy.Subscriber('/odom', Odometry, self.update_pose)
 
         rospy.loginfo("Nodo ChatGPT inicializado. Esperando solicitudes del usuario...")
+
+#### CALLBACKS Y ACTUALIZACION DE ESTADOS ####
 
     def update_scan(self, msg):
         self.scan_data = msg
@@ -72,26 +78,14 @@ class ChatGPTNode:
             "yaw": round(yaw, 2)
         }
 
-    # ----------------- Follower -----------------
     def follower_state_callback(self, msg):
         self.follower_state = msg.data
 
-    # ----------------- Corridor Follower -----------------
     def corridor_follower_state_callback(self, msg):
         self.corridor_follower_state = msg.data
 
-    def handle_user_input(self, msg):
-        user_input = msg.data
-        rospy.loginfo(f"{YELLOW}Petición recibida: {user_input}{RESET}")
-        rospy.loginfo(f"{YELLOW}estado follow me / corridor follower: {self.follower_state} / {self.corridor_follower_state}{RESET}")
-        prompt = self.build_prompt(user_input, self.follower_state, self.corridor_follower_state)
-        gpt_code = self.query_chatgpt(prompt)
-
-        if gpt_code:
-            if self.save_code(gpt_code):
-                self.db.insert_user_request(user_input, gpt_code, self.serialize_pose())
-                self.run_generated_node()
-
+#### CONSTRUCCION DEL PROMPT PARA CHATGPT ####    
+    
     def build_prompt(self, user_input, follower_state, corridor_follower_state):
         # Obtener las últimas 5 interacciones para contexto (petición + pose previa)
         last_interactions = self.db.get_last_n_user_requests(5)
@@ -211,7 +205,7 @@ class ChatGPTNode:
     "{user_input}"
     """
 
-
+#### FUNCION PARA CONSULTAR A CHATGPT ####
 
     def query_chatgpt(self, prompt):
         try:
@@ -227,6 +221,8 @@ class ChatGPTNode:
         except Exception as e:
             rospy.logerr(f"Error inesperado al consultar ChatGPT: {e}")
             return None
+
+#### FUNCIONES DE GUARDADO Y EJECUCION DEL CODIGO GENERADO POR CHATGPT ####
 
     def save_code(self, code):
         try:
@@ -274,26 +270,26 @@ class ChatGPTNode:
         except Exception as e:
             rospy.logwarn(f"No se pudo cerrar terminales con título '{title}': {e}")
 
-
-
-
-    def format_pose(self):
-        if not self.pose:
-            return "Desconocida"
-        p = self.pose.position
-        o = self.pose.orientation
-        return f"x={p.x:.2f}, y={p.y:.2f}, orientación (quat z={o.z:.2f})"
-
-    def format_scan(self):
-        if not self.scan_data:
-            return "Sin datos"
-        mid = len(self.scan_data.ranges) // 2
-        return f"{self.scan_data.ranges[mid]:.2f} metros al frente"
+#### FUNCION PARA GUARDAR POSICIONES EN LA BASE DE DATOS ####
 
     def serialize_pose(self):
         if not self.pose:
             return None
         return self.pose  # Ya es un diccionario con x, y, yaw
+    
+#### FUNCION PRINCIPAL DE MANEJO DE PETICIONES DEL USUARIO ####
+
+    def handle_user_input(self, msg):
+        user_input = msg.data
+        rospy.loginfo(f"{YELLOW}Petición recibida: {user_input}{RESET}")
+        rospy.loginfo(f"{YELLOW}estado follow me / corridor follower: {self.follower_state} / {self.corridor_follower_state}{RESET}")
+        prompt = self.build_prompt(user_input, self.follower_state, self.corridor_follower_state)
+        gpt_code = self.query_chatgpt(prompt)
+
+        if gpt_code:
+            if self.save_code(gpt_code):
+                self.db.insert_user_request(user_input, gpt_code, self.serialize_pose())
+                self.run_generated_node()
 
 
 if __name__ == "__main__":

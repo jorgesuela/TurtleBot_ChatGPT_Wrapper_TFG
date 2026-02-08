@@ -3,22 +3,21 @@
 import rospy
 from TurtleBotActions import TurtleBotActions
 
-class WallApproachNode:
-    def __init__(self):
-        rospy.init_node('wall_approach_node')
-        self.tb_actions = TurtleBotActions()
-        self.tb_actions.say("Voy a avanzar hasta la pared más cercana.")
-        self.approach_wall()
+def main():
+    rospy.init_node('follow_me_node')
+    actions = TurtleBotActions()
 
-    def approach_wall(self):
-        success = self.tb_actions.approach_nearest_obstacle()
-        if success:
-            self.tb_actions.say("He llegado a la pared.")
-        else:
-            self.tb_actions.say("No he podido acercarme a la pared de forma segura.")
+    # Check if Follow Me mode is already started
+    follower_state = 'stopped'  # Assume the state based on the context provided
+
+    if follower_state == 'stopped':
+        actions.follow_me()
+        actions.say("Activando el modo Follow Me. Ahora te seguiré.")
+    else:
+        actions.say("Ya estaba en modo Follow Me.")
 
 if __name__ == '__main__':
     try:
-        WallApproachNode()
+        main()
     except rospy.ROSInterruptException:
         pass

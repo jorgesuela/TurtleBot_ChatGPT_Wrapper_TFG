@@ -8,6 +8,7 @@ import os
 import subprocess
 
 class RobotSpeaker:
+    
     def __init__(self):
         self.soundhandle = SoundClient()
         rospy.sleep(1)

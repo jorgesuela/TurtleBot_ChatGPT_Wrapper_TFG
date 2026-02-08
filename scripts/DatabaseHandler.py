@@ -2,10 +2,11 @@ import sqlite3
 import threading
 import json
 
-"IMPORTANTE: Tanto el nodo de chatgpt como el nodo de control del robot acceden a la base de datos."
+"IMPORTANTE: Tanto el nodo de chatgpt como turtlebot_actions acceden a la base de datos."
 "Esta clase debe usar thread locks para no permitir accesos simultaneos"
 
 class DatabaseHandler:
+
     def __init__(self, db_path):
         self.db_path = db_path
         self.lock = threading.Lock()  # Crear un Lock para evitar accesos concurrentes
@@ -49,6 +50,8 @@ class DatabaseHandler:
             conn.commit()
             conn.close()
 
+#### OPERACIONES DE GUARDADO ####
+    
     def insert_place(self, name, x, y, yaw):
         with self.lock:
             conn = self.create_connection()
@@ -87,6 +90,7 @@ class DatabaseHandler:
             conn.commit()
             conn.close()
 
+#### OPERACIONES DE ELIMINACION ####
 
     def delete_place(self, name):
         """
@@ -102,6 +106,8 @@ class DatabaseHandler:
             conn.commit()
             conn.close()
             return deleted
+
+#### OPERACIONES DE CONSULTA ####
 
     def get_place(self, name):
         with self.lock:

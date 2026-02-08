@@ -7,8 +7,9 @@
 
 #IMPORTANTEEEEEE!!!!!!!
 # he hecho esto ^^^, hay que probarlo:
-# en el robot, hay que cambiar el launch del follower para usar el nuevo que tengo en mi pc guardado
-# el antiguo lo renombras a ..._v2 para tenerlo de backup.
+# en el robot, hay que cambiar el launch del follower_v2 para usar el nuevo que tengo en mi pc guardado
+# en el robot, en jorge/scripts/launch_follower.sh, hay que cambiar la linea que lanza el follower.launch por el nuevo, este:
+# roslaunch turtlebot_follower follower_v2.launch use_camera:=false
 
 
 import shlex, subprocess, os, signal, time
@@ -27,8 +28,8 @@ from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import Bool
 
 # necesario para el ssh automatico. el nodo follower debe estar corriendo en el robot
+ROBOT_IP   = "10.152.124.172" # ← AQUI HAY QUE PONER LA IP DEL ROBOT, CUIDADO QUE CAMBIA
 ROBOT_USER = "turtlebot"  # ← usuario del robot
-ROBOT_IP   = "10.152.124.172" # AQUI HAY QUE PONER LA IP DEL ROBOT, CUIDADO QUE CAMBIA
 PASSWORD   = "ros"        # ← contraseña del robot
 
 class TurtleBotActions:
@@ -39,7 +40,6 @@ class TurtleBotActions:
         self.current_odom_pose = None # coordenadas de odometría
         self.current_map_pose = None # coordenadas del mapa
         self.speaker = RobotSpeaker()
-        self.camera_process = None  # Para guardar el proceso de la cámara
 
         # Crear una instancia de DatabaseHandler en el hilo principal
         self.db_paths = {
@@ -47,27 +47,23 @@ class TurtleBotActions:
             "database_2": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_2.db", # ESTA DB ES DEL MAPA XXXX
             "database_3": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_3.db", # ESTA DB ES DEL MAPA XXXX
         }
-        self.current_database = "database_1" # DB SELEECCIONADA, CAMBIAR SEGUN NECESIDAD
+        self.current_database = "database_1" # Seleccionar la base de datos activa (segun el mapa que este cargado)
         self.db = DatabaseHandler(self.db_paths[self.current_database])
 
+        #SUSCRIPTORES
         rospy.Subscriber('/scan', LaserScan, self.update_scan)
         rospy.Subscriber('/odom', Odometry, self.odom_pose_callback)
         rospy.Subscriber("/amcl_pose", PoseWithCovarianceStamped, self.map_pose_callback, queue_size=1)
         rospy.Subscriber("/map", OccupancyGrid, self.map_callback)
-        
+
+        #PUBLICADORES
         self.cmd_vel_pub = rospy.Publisher('/cmd_vel_mux/input/navi', Twist, queue_size=10)
         self.goal_pub = rospy.Publisher('/move_base_simple/goal', PoseStamped, queue_size=10)
-        # Suscriptor para publicar el estado del follower
         self.follower_state_pub = rospy.Publisher('/follower_state', String, queue_size=10)
+        # este es para que el chatgpt sepa si el follower esta activo o no
         self.wall_follower_state_pub = rospy.Publisher('/wall_follower_state', String, queue_size=10)
-
-        # para el corridor follower:
-        self.wall_follower_enable_pub = rospy.Publisher(
-        "/wall_follower/enable",
-        Bool,
-        queue_size=1,
-        latch=True
-        )
+        # este es para que el nodo wall_follower sepa si tiene que estar activo o no.
+        self.wall_follower_enable_pub = rospy.Publisher("/wall_follower/enable", Bool, queue_size=1, latch=True)
 
         rospy.sleep(1.0)
 
@@ -420,7 +416,7 @@ class TurtleBotActions:
     def say(self, text):
         self.speaker.say(text)
 
-    # FUNCIONES DE NAVEGACION AUTOMATIZADA CON MAPA (solo funcionan si hay mapa conocido)
+#### FUNCIONES DE NAVEGACION CON MAPA (solo con amcl y mapa cargado) ####
     
     def add_place(self, lugar):
         """
@@ -510,7 +506,7 @@ class TurtleBotActions:
 
         rospy.logwarn("El robot no llegó a la meta dentro del tiempo esperado.")
 
-######## PENDIENTES DE REVISION!!!! ########
+#### FOLLOWERS AUTOMATIZADOS: PENDIENTES DE REVISION!!!! ####
 
     def _ssh_command(self):
         """Comando base ssh con sshpass."""
@@ -594,8 +590,6 @@ class TurtleBotActions:
         # Actualiza estado y reinicia cámara
         self.follower_state_pub.publish("stopped")
         rospy.loginfo("'Follow Me' detenido.")
-
-# ESTO TIENE UN FALLO, NO SE CIERRA BIEN EL NODO
 
     def start_corridor_follower(self):
         rospy.loginfo("Activando Wall Follower...")

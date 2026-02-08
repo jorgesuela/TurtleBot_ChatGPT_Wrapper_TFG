@@ -21,6 +21,7 @@ if not telegram_api_key:
 bot = telebot.TeleBot(telegram_api_key)
 
 class TelegramSpeechToTextNode:
+
     def __init__(self):
         """
         Inicializa el nodo de ROS para procesar mensajes de voz de Telegram.
@@ -29,6 +30,8 @@ class TelegramSpeechToTextNode:
         self.pub = rospy.Publisher('/speech_to_text', String, queue_size=10)
         self.recognizer = sr.Recognizer()
         rospy.loginfo("Nodo de Telegram Speech-to-Text iniciado.")
+
+#### PUBLICA LOS MENSAJES EN EL TOPIC /speech_to_text ####
 
     def process_text(self, text, chat_id):
         """
@@ -42,6 +45,8 @@ class TelegramSpeechToTextNode:
         self.pub.publish(msg)
         bot.send_message(chat_id, "Orden enviada al chatgpt.")
         rospy.loginfo(f"{GREEN}Mensaje publicado en /speech_to_text: {text}{RESET}")
+
+#### HANDLERS DE TELEGRAM PARA MENSAJES DE TEXTO Y VOZ ####
 
 node = TelegramSpeechToTextNode()
 
@@ -88,6 +93,8 @@ def handle_voice(message):
         bot.send_message(message.chat.id, "Error en el reconocimiento de voz.")
     finally:
         os.remove(audio_file)  # Eliminar archivo temporal
+
+#### FUNCION PRINCIPAL PARA INICIAR EL BOT DE TELEGRAM ####
 
 def run_bot():
     """
