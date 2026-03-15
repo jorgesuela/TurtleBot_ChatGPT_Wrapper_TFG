@@ -10,6 +10,7 @@ from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 from RobotSpeaker import RobotSpeaker
 from DatabaseHandler import DatabaseHandler
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -57,7 +58,7 @@ class ChatGPTNode:
         # Suscriptores
         rospy.Subscriber('/speech_to_text', String, self.handle_user_input)
         rospy.Subscriber('/scan', LaserScan, self.update_scan)
-        rospy.Subscriber('/odom', Odometry, self.update_pose)
+        rospy.Subscriber('/amcl_pose', PoseWithCovarianceStamped, self.update_pose)
 
         rospy.loginfo("Nodo ChatGPT inicializado. Esperando solicitudes del usuario...")
 

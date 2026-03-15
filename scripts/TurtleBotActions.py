@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
 
-# Hay una incompatibilidad entre el amcl node y el follow me, ya que ambos usan la camara y el image to laserscan,
-# como hago para que no den conflicto?
-# lo mejor seria que el amcl se lanzara desde el principio, y que el follow me no lanzara nada que el amcl ya tenga lanzado
-# pero como????
-
-#IMPORTANTEEEEEE!!!!!!!
-# he hecho esto ^^^, hay que probarlo:
-# en el robot, hay que cambiar el launch del follower_v2 para usar el nuevo que tengo en mi pc guardado
-# en el robot, en jorge/scripts/launch_follower.sh, hay que cambiar la linea que lanza el follower.launch por el nuevo, este:
-# roslaunch turtlebot_follower follower_v2.launch use_camera:=false
-
-
+# FALLOS
+# buscar la forma de que la ip no cambie, o que se actualice sola
+# si esta muy cerca de la pared se queda bloqueado !!
+# se le ha pedido que se acerque a la otra pared y no entendio que se referia a la pared de atras
+# vuelve a donde estabas no funciona
 import shlex, subprocess, os, signal, time
 from std_msgs.msg import String
 import numpy as np
@@ -28,7 +21,7 @@ from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import Bool
 
 # necesario para el ssh automatico. el nodo follower debe estar corriendo en el robot
-ROBOT_IP   = "10.152.124.172" # ← AQUI HAY QUE PONER LA IP DEL ROBOT, CUIDADO QUE CAMBIA
+ROBOT_IP   = "10.52.55.172" # ← AQUI HAY QUE PONER LA IP DEL ROBOT, CUIDADO QUE CAMBIA
 ROBOT_USER = "turtlebot"  # ← usuario del robot
 PASSWORD   = "ros"        # ← contraseña del robot
 
@@ -575,7 +568,7 @@ class TurtleBotActions:
 
         # Mata el nodo follower remoto
         subprocess.run(
-            f"{self._ssh_command()} pkill -f follower.launch",
+            f"{self._ssh_command()} pkill -f followerV2.launch",
             shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10
         )
 
