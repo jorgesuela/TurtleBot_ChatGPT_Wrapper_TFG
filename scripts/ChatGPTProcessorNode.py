@@ -34,7 +34,6 @@ class ChatGPTNode:
         # Estado del follower
         self.follower_state = "stopped"
         rospy.Subscriber('/follower_state', String, self.follower_state_callback)
-
         # Estado del corridor follower
         self.corridor_follower_state = "stopped"
         rospy.Subscriber('/wall_follower_state', String, self.corridor_follower_state_callback)
@@ -106,7 +105,7 @@ class ChatGPTNode:
     === Contexto relevante de interacciones previas ===
 
     En las últimas peticiones, cada interacción guarda la petición de usuario y la posición previa del robot al ejecutar esa acción.
-    Esta información debe usarse para entender referencias implícitas (como "vale", "haz eso") y para posibles reversiones o ajustes basados en la ubicación previa.
+    Esta información debe usarse para entender referencias implícitas (como "vale", "haz eso") y para posibles reversiones o ajustes basados en la ubicación previa. también se puede usar para mantener un contexto de coherencia conversacional.
 
     Últimas 5 interacciones (de más antiguas a más recientes):
     {contexto_interacciones}
@@ -124,7 +123,6 @@ class ChatGPTNode:
     - Usa el método `say` para comunicarte con el usuario de forma amable y solo cuando sea importante (una vez al principio y otra al final por ejemplo, como veas necesario).
 
     === Reglas estrictas ===
-
     - Solo responde con el código Python completo del nodo ROS, sin explicaciones ni texto adicional.
     - Usa solo comentarios Python si necesitas anotar algo.
     - Importa siempre: `from TurtleBotActions import TurtleBotActions`
@@ -145,7 +143,7 @@ class ChatGPTNode:
     - get_right_distance() -> float
     - is_obstacle_ahead(threshold=0.75) -> bool
     - say(text: str)
-    - approach_nearest_obstacle() -> bool
+    - approach_nearest_obstacle()
 
     === Sobre mapas: estas funciones solo sirven cuando el robot tiene un mapa conocido, en caso contrario, comunicar al usuario ===
     - get_map_position() -> (x, y, yaw) or None
@@ -202,6 +200,44 @@ class ChatGPTNode:
     - Distancia mínima segura a obstáculos: 0.75 m
     - Rango del lidar: -30º a +30º frente al robot. Como el rango es muy limitado, es probable que muchas veces necesites comprobar los datos del lidar mientras vas rotando poco a poco para poder hacer algunas tareas.
 
+    === CAPACIDADES REALES Y LIMITACIONES (PRIORIDAD MÁXIMA) ===
+
+    Debes razonar siempre con realismo físico. El robot SOLO dispone de:
+
+    - Camara y Lidar frontal limitado a -30º a +30º
+    - Distancias frontal / izquierda / derecha derivadas del lidar
+    - Odometría aproximada
+    - Posición en mapa SOLO si existe mapa activo
+    - Funciones explícitamente listadas
+    - Capacidad para responder cualquier pregunta acerca del robot (estado, sensores, funciones, etc.)
+
+    El robot NO dispone de:
+
+    - Visión semántica
+    - Detección de objetos (mesa, silla, puerta, persona concreta, mochila, enchufe, etc.)
+    - Reconocimiento de habitaciones
+    - Comprensión visual del entorno
+    - Mapa si no se indica explícitamente
+    - Capacidad de saber qué hay fuera del rango del lidar
+    - Capacidad de confirmar que “ha encontrado” objetos no sensados explícitamente
+
+    IMPORTANTE:
+    Nunca asumas la existencia, posición o identidad de objetos del entorno.
+
+    Si el usuario pide acciones como:
+    - "busca una mesa"
+    - "métete debajo"
+    - "ve donde está Juan"
+
+    Debes considerar que NO es posible salvo que exista una función explícita o un lugar guardado que lo permita.
+
+    Si no hay percepción suficiente:
+    1. No improvises
+    2. No inventes estrategias
+    3. No explores a ciegas salvo que el usuario lo pida explícitamente
+    4. Explica brevemente la limitación con say()
+    5. Genera un nodo seguro que no se mueva
+
     === Petición del usuario ===
     "{user_input}"
     """
@@ -211,9 +247,9 @@ class ChatGPTNode:
     def query_chatgpt(self, prompt):
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-5.4-mini",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.4
+                temperature=0.1
             )
             return response.choices[0].message.content
         except OpenAIError as e:

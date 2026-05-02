@@ -41,10 +41,15 @@ class WallFollowerNode:
         rospy.init_node('wall_follower_node')
 
         # Parámetros
-        self.obstacle_distance = rospy.get_param('~obstacle_distance', 0.5)
+        self.wall_distance = rospy.get_param('~wall_distance', 0.60)
+        self.front_stop_distance = rospy.get_param('~front_stop_distance', 0.50)
+        self.front_slow_distance = rospy.get_param('~front_slow_distance', 0.70)
         self.forward_speed = rospy.get_param('~forward_speed', 0.2)
         self.max_angular_speed = rospy.get_param('~max_angular_speed', 0.5)
         self.tolerance = rospy.get_param('~tolerance', 0.04)
+
+        self.follow_side = None
+        self.switch_margin = 0.20
 
         self.laser_sub = rospy.Subscriber('/scan', LaserScan, self.laser_callback)
         self.cmd_vel_pub = rospy.Publisher('/cmd_vel_mux/input/navi', Twist, queue_size=10)
@@ -114,36 +119,70 @@ class WallFollowerNode:
         left_dist = np.mean(left_dists) if left_dists else float('inf')
         right_dist = np.mean(right_dists) if right_dists else float('inf')
 
-        # Selección automática de la pared más cercana
-        if left_dist <= right_dist:
+        # Elegir pared inicial
+        if self.follow_side is None:
+            if left_dist <= right_dist:
+                self.follow_side = "left"
+            else:
+                self.follow_side = "right"
+
+        # Si la pared elegida desaparece, cambiar
+        if self.follow_side == "left":
+            if not np.isfinite(left_dist) and np.isfinite(right_dist):
+                self.follow_side = "right"
+
+        elif self.follow_side == "right":
+            if not np.isfinite(right_dist) and np.isfinite(left_dist):
+                self.follow_side = "left"
+
+        # Cambio solo si hay diferencia clara
+        if np.isfinite(left_dist) and np.isfinite(right_dist):
+            if self.follow_side == "left" and right_dist + self.switch_margin < left_dist:
+                self.follow_side = "right"
+
+            elif self.follow_side == "right" and left_dist + self.switch_margin < right_dist:
+                self.follow_side = "left"
+
+        # Aplicar pared elegida
+        if self.follow_side == "left":
             side_dist = left_dist
-            side_multiplier = 1.0  # izquierda
+            side_multiplier = 1.0
         else:
             side_dist = right_dist
-            side_multiplier = -1.0  # derecha
+            side_multiplier = -1.0
 
         # Tiempo delta para PID
         current_time = rospy.Time.now()
         dt = (current_time - self.prev_time).to_sec()
         self.prev_time = current_time
 
-        follow_distance = self.obstacle_distance + 0.25
-
         # Lógica de control
-        if front_dist < self.obstacle_distance:
+
+        # Obstáculo muy cerca delante -> girar
+        if front_dist < self.front_stop_distance:
             cmd.linear.x = 0.0
             cmd.angular.z = side_multiplier * self.max_angular_speed
+
         else:
             if not np.isfinite(side_dist):
-                side_dist = self.obstacle_distance
+                side_dist = self.wall_distance
 
-            if abs(side_dist - self.obstacle_distance) < self.tolerance:
+            # Error lateral real
+            error = self.wall_distance - side_dist
+
+            if abs(error) < self.tolerance:
                 error = 0.0
-            else:
-                error = follow_distance - side_dist
-                error = np.clip(error, -follow_distance, follow_distance)
 
-            cmd.linear.x = self.forward_speed
+            # Reducir velocidad si hay algo delante cerca
+            if front_dist < self.front_slow_distance:
+                factor = (front_dist - self.front_stop_distance) / (
+                    self.front_slow_distance - self.front_stop_distance
+                )
+                factor = np.clip(factor, 0.3, 1.0)
+                cmd.linear.x = self.forward_speed * factor
+            else:
+                cmd.linear.x = self.forward_speed
+
             cmd.angular.z = self.pid.compute(0, error, dt) * side_multiplier
 
         # Prevenir NaN y limitar velocidades

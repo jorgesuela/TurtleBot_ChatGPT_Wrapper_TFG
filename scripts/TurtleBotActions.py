@@ -2,10 +2,10 @@
 
 # FALLOS
 # buscar la forma de que la ip no cambie, o que se actualice sola
-# si esta muy cerca de la pared se queda bloqueado !!
 # se le ha pedido que se acerque a la otra pared y no entendio que se referia a la pared de atras
 # vuelve a donde estabas no funciona
 import shlex, subprocess, os, signal, time
+from std_msgs import msg
 from std_msgs.msg import String
 import numpy as np
 import rospy
@@ -21,7 +21,7 @@ from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import Bool
 
 # necesario para el ssh automatico. el nodo follower debe estar corriendo en el robot
-ROBOT_IP   = "10.52.55.172" # ← AQUI HAY QUE PONER LA IP DEL ROBOT, CUIDADO QUE CAMBIA
+ROBOT_IP   = "10.231.182.172" # ← AQUI HAY QUE PONER LA IP DEL ROBOT, CUIDADO QUE CAMBIA
 ROBOT_USER = "turtlebot"  # ← usuario del robot
 PASSWORD   = "ros"        # ← contraseña del robot
 
@@ -301,7 +301,7 @@ class TurtleBotActions:
     def is_obstacle_ahead(self, threshold=0.7):
         return self.get_front_distance() < threshold
     
-    def approach_nearest_obstacle(self, safe_distance=0.50):
+    def approach_nearest_obstacle(self, safe_distance=0.75):
         """
         Busca el obstáculo más cercano, se orienta hacia él,
         lo centra finamente y se aproxima hasta una distancia segura.
@@ -580,7 +580,7 @@ class TurtleBotActions:
             except subprocess.TimeoutExpired:
                 self.term_proc.kill()
 
-        # Actualiza estado y reinicia cámara
+        # Actualiza estado 
         self.follower_state_pub.publish("stopped")
         rospy.loginfo("'Follow Me' detenido.")
 
@@ -594,7 +594,5 @@ class TurtleBotActions:
         self.wall_follower_enable_pub.publish(False)
         self.stop()
         self.wall_follower_state_pub.publish("stopped")
-
-
 
 
