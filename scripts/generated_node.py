@@ -6,16 +6,9 @@ rospy.init_node("generated_node", anonymous=True)
 tba = TurtleBotActions()
 
 try:
-    tba.say("Vale, voy a darme la vuelta.")
     tba.stop()
-    rospy.sleep(0.5)
-    tba.rotate(180, speed=0.5)
-    tba.stop()
-except Exception as e:
-    try:
-        tba.stop()
-        tba.say("No he podido completar el giro de forma segura.")
-    except Exception:
-        pass
+    tba.say("No tengo emociones reales, pero me gusta ayudarte.")
+except Exception:
+    pass
 
-# SUMMARY: Vale, voy a darme la vuelta.
+# SUMMARY: No tengo emociones, pero estoy aquí para ayudarte.

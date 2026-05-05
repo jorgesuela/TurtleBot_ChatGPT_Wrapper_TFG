@@ -5,8 +5,13 @@ import os
 import telebot
 import speech_recognition as sr
 from io import BytesIO
+from DatabaseHandler import DatabaseHandler
 from std_msgs.msg import String
 from pydub import AudioSegment
+import re
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+import tf.transformations
+from TurtleBotActions import TurtleBotActions
 
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -27,20 +32,110 @@ class TelegramSpeechToTextNode:
         Inicializa el nodo de ROS para procesar mensajes de voz de Telegram.
         """
         rospy.init_node('telegram_speech_to_text_node', anonymous=True)
+
+        self.db_paths = {
+            "database_1": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_1.db",
+            "database_2": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_2.db",
+            "database_3": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_3.db",
+        }
+
+        self.current_database = "database_1"
+        self.db = DatabaseHandler(self.db_paths[self.current_database])
+
+        self.pose = None
+        self.follow_me_state = "stopped"
+        self.wall_follower_state = "stopped"
+        self.stop_commands = {"para", "parate", "detente", "quieto", "quedate ahi", "parate ya", "quedate quieto"}
+        self.tba = TurtleBotActions()
+
         self.pub = rospy.Publisher('/speech_to_text', String, queue_size=10)
+        rospy.Subscriber('/follower_state', String, self.follow_me_callback)
+        rospy.Subscriber('/wall_follower_state', String, self.wall_follower_callback)
+        rospy.Subscriber('/amcl_pose', PoseWithCovarianceStamped, self.update_pose)
+
         self.recognizer = sr.Recognizer()
+
         rospy.loginfo("Nodo de Telegram Speech-to-Text iniciado.")
+
+#### CALLBACKS PARA MANEJAR PARADA ANTICIPADA ####
+
+    def update_pose(self, msg):
+        pos = msg.pose.pose.position
+        ori = msg.pose.pose.orientation
+        q = [ori.x, ori.y, ori.z, ori.w]
+        _, _, yaw = tf.transformations.euler_from_quaternion(q)
+
+        self.pose = {
+            "x": round(pos.x, 2),
+            "y": round(pos.y, 2),
+            "yaw": round(yaw, 2)
+        }
+
+    def follow_me_callback(self, msg):
+        self.follow_me_state = msg.data
+
+    def wall_follower_callback(self, msg):
+        self.wall_follower_state = msg.data
+
+    def serialize_pose(self):
+        if not self.pose:
+            return None
+        return self.pose
+
+#### INTERCEPTOR DE PARADA ####
+
+    def handle_stop_command(self):
+
+        rospy.logwarn(f"{YELLOW}COMANDO DE PARADA ANTICIPADA DETECTADO{RESET}")
+
+        # 🔴 CASO 1: FOLLOW ME
+        if self.follow_me_state == "started":
+            rospy.loginfo("Parando Follow Me anticipadamente")
+            self.tba.stop_follow_me()
+
+            self.db.insert_user_request(
+                    "deja de seguirme",
+                    "he dejado de seguirte",
+                    self.serialize_pose()
+                )
+            self.tba.say("He dejado de seguirte.")
+            return
+
+        # 🔴 CASO 2: WALL FOLLOWER
+        if self.wall_follower_state == "started":
+            rospy.loginfo("Parando Wall Follower anticipadamente")
+            self.tba.stop_wall_follower()
+
+            self.db.insert_user_request(
+                    "deja de seguir la pared",
+                    "he dejado de seguir la pared",
+                    self.serialize_pose()
+                )
+            self.tba.say("He dejado de seguir la pared.")
+            return
+
+        # 🔴 CASO 3: STOP GENERAL
+        rospy.loginfo("Parada general anticipadamente")
+        self.tba.stop()
+
+        self.db.insert_user_request(
+                    "para",
+                    "voy a detenerme",
+                    self.serialize_pose()
+                )
+        self.tba.say("Me detengo.")
 
 #### PUBLICA LOS MENSAJES EN EL TOPIC /speech_to_text ####
 
     def process_text(self, text, chat_id):
-        """
-        Procesa el texto recibido y lo publica en el topic /speech_to_text si contiene la palabra clave "robot".
-        :param text: Texto recibido del usuario.
-        :param chat_id: ID del chat de Telegram.
-        """
         text = text.strip().lower()
+        
+        # 🔴 Interceptor de parada anticipada
+        if text in self.stop_commands:
+            self.handle_stop_command()
+            return
 
+        # 🟢 Flujo normal
         msg = String(data=text)
         self.pub.publish(msg)
         bot.send_message(chat_id, "Orden enviada al chatgpt.")
