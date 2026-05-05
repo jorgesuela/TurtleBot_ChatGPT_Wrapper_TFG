@@ -34,9 +34,9 @@ class ChatGPTNode:
         # Estado del follower
         self.follower_state = "stopped"
         rospy.Subscriber('/follower_state', String, self.follower_state_callback)
-        # Estado del corridor follower
-        self.corridor_follower_state = "stopped"
-        rospy.Subscriber('/wall_follower_state', String, self.corridor_follower_state_callback)
+        # Estado del wall follower
+        self.wall_follower_state = "stopped"
+        rospy.Subscriber('/wall_follower_state', String, self.wall_follower_state_callback)
 
         # Robot Speaker
         self.speaker = RobotSpeaker()
@@ -81,165 +81,251 @@ class ChatGPTNode:
     def follower_state_callback(self, msg):
         self.follower_state = msg.data
 
-    def corridor_follower_state_callback(self, msg):
-        self.corridor_follower_state = msg.data
+    def wall_follower_state_callback(self, msg):
+        self.wall_follower_state = msg.data
 
 #### CONSTRUCCION DEL PROMPT PARA CHATGPT ####    
     
-    def build_prompt(self, user_input, follower_state, corridor_follower_state):
+    def build_prompt(self, user_input, follower_state, wall_follower_state):
         # Obtener las últimas 5 interacciones para contexto (petición + pose previa)
         last_interactions = self.db.get_last_n_user_requests(5)
-        # Construir contexto con especial énfasis en la última interacción
+
         contexto_interacciones = ""
-        for i, (req, pose_json) in enumerate(last_interactions, 1):
-            pose_str = pose_json if pose_json else "Posición desconocida"
-            marcador = "(última interacción)" if i == 1 else f"(interacción {i})"
-            contexto_interacciones += f"{marcador}: Petición: \"{req}\", Posición previa del robot: {pose_str}\n"
+
+        for i, (req, summary, pose_json) in enumerate(last_interactions, 1):
+            marcador = "(más reciente)" if i == 1 else ""
+
+            contexto_interacciones += (
+                f"[{i}] {marcador}\n"
+                f"user: {req}\n"
+                f"robot: {summary if summary else 'sin resumen'}\n"
+                f"pose: {pose_json if pose_json else 'desconocida'}\n\n"
+            )
         # Obtener lugares almacenados
         stored_places = self.db.get_all_places()
         lugares_str = ", ".join(stored_places) if stored_places else "ninguno"
 
         return f"""
-    Eres un asistente robótico para TurtleBot2 con ROS1 Noetic. Se te dará una solicitud en español y debes generar solo el código completo de un nodo ROS Python3 para que el robot la ejecute.
+Eres un asistente robótico para TurtleBot2 con ROS1 Noetic.
 
-    === Contexto relevante de interacciones previas ===
+Tu única tarea es:
+➡️ Generar código completo de un nodo ROS en Python3
+➡️ NO escribir explicaciones fuera del código
 
-    En las últimas peticiones, cada interacción guarda la petición de usuario y la posición previa del robot al ejecutar esa acción.
-    Esta información debe usarse para entender referencias implícitas (como "vale", "haz eso") y para posibles reversiones o ajustes basados en la ubicación previa. también se puede usar para mantener un contexto de coherencia conversacional.
+====================================================
+🧠 OBJETIVO DEL SISTEMA
+====================================================
 
-    Últimas 5 interacciones (de más antiguas a más recientes):
-    {contexto_interacciones}
+Interpretar la petición del usuario y generar un comportamiento seguro, realista y ejecutable para el robot usando las funciones disponibles.
 
-    === Instrucciones y contexto ===
+Debes:
+- Entender la intención del usuario
+- Decidir la mejor estrategia posible
+- Ejecutar solo acciones posibles físicamente
+- Priorizar seguridad del robot
 
-    - Distingue si la acción está relacionada con el mapa o no:
-    * Acciones relacionadas con el mapa incluyen: navegar a un lugar guardado, ir a coordenadas específicas, añadir o eliminar lugares en la base de datos.
-    * Acciones no relacionadas con el mapa incluyen: movimientos básicos (avanzar, girar), detección y esquiva de obstáculos, control reactivo, etc.
+⚠️ Si algo no es posible:
+→ usar say() para explicarlo
+→ proponer alternativa realista
 
-    - Para navegación con mapa, usa las funciones de TurtleBotActions que gestionan la base de datos y navegación automática.
+====================================================
+📚 CONTEXTO DISPONIBLE
+====================================================
 
-    - El robot tiene almacenados estos lugares conocidos, debes ser capaz de intuir cuando el usuario se refiere a uno de estos lugares: {lugares_str}.
-
-    - Usa el método `say` para comunicarte con el usuario de forma amable y solo cuando sea importante (una vez al principio y otra al final por ejemplo, como veas necesario).
-
-    === Reglas estrictas ===
-    - Solo responde con el código Python completo del nodo ROS, sin explicaciones ni texto adicional.
-    - Usa solo comentarios Python si necesitas anotar algo.
-    - Importa siempre: `from TurtleBotActions import TurtleBotActions`
-    - Hay algunas funciones ya implementadas en `TurtleBotActions` que puedes utilizar si las necesitas,tambien puedes crear tus propias funciones si consideras que es necesario.
-    - El robot debe actuar de forma segura y robusta.
-    - Debes proporcionar retroalimentación al usuario mediante el método `say` siempre que lo consideres necesario.
-
-    === Funciones disponibles en TurtleBotActions ===
-
-    - stop()
-    - get_odom_position() -> (x, y, yaw) or None
-    - compute_distance(x0, y0, x1, y1) -> float
-    - move_forward(distance, speed=0.2, obstacle_threshold=0.75) -> bool
-    - move_backward(distance, speed=0.2, obstacle_threshold=0.75) -> bool
-    - rotate(angle_deg, speed=0.5) -> bool
-    - get_front_distance() -> float
-    - get_left_distance() -> float
-    - get_right_distance() -> float
-    - is_obstacle_ahead(threshold=0.75) -> bool
-    - say(text: str)
-    - approach_nearest_obstacle()
-
-    === Sobre mapas: estas funciones solo sirven cuando el robot tiene un mapa conocido, en caso contrario, comunicar al usuario ===
-    - get_map_position() -> (x, y, yaw) or None
-    - add_place(lugar: str)
-    - delete_place(lugar: str)
-    - go_to_place(place_name: str)
-    - go_to_coordinates(x, y, yaw) # util para volver a una posición previa
-
-    === MODOS DE MOVIMIENTO AUTÓNOMO ===
-
-    El robot tiene dos modos de movimiento autónomo que **no pueden estar activos al mismo tiempo**. Debes controlar estos modos usando los estados proporcionados y comunicar al usuario cualquier restricción o acción redundante.
-
-    1. FOLLOW ME MODE
-    - Propósito: Seguir a una persona automáticamente.
-    - Funciones disponibles: follow_me(), stop_follow_me()
-    - ACTUA EN BASE A ESTE VALOR : follower_state = {follower_state}, no puedes usar este atributo en tu nodo generado ni acceder a el, genera el nodo fiandote de este valor.
-    - MUY IMPORTANTE: Reglas ESTRICTAS de comportamiento:
-      * Si follower_state = 'started' y el usuario quiere activar Follow Me, GENERA UN NODO QUE UNICAMENTE HAGA ESTO:
-        "say": "Ya estaba en modo Follow Me."
-      * Si follower_state = 'stopped' y el usuario quiere desactivar Follow Me, GENERA UN NODO QUE UNICAMENTE HAGA ESTO:
-        "say": "No estaba siguiendote."
-      * Si corridor_follower_state = 'started' y el usuario quiere activar Follow Me, GENERA UN NODO QUE UNICAMENTE HAGA ESTO:
-        "say": "Primero debes desactivar el modo Corridor Follower para poder usar Follow Me."     
-      * Jamas uses follow_me() si follower_state = 'started'.
-      * Jamas uses stop_follow_me() si follower_state = 'stopped'.
-
-    2. WALL / CORRIDOR FOLLOWER MODE
-    - Propósito: Seguir paredes o pasillos automáticamente.
-    - Funciones disponibles: start_corridor_follower(), stop_corridor_follower()
-    - ACTUA EN BASE A ESTE VALOR : follower_state = {corridor_follower_state}, no puedes usar este atributo en tu nodo generado ni acceder a el, genera el nodo fiandote de este valor.
-    - MUY IMPORTANTE: Reglas ESTRICTAS de comportamiento:
-      * Si corridor_follower_state = 'started' y el usuario quiere activar Corridor Follower, GENERA UN NODO QUE UNICAMENTE HAGA ESTO:
-        "say": "Ya estaba siguiendo la pared/pasillo."
-      * Si corridor_follower_state = 'stopped' y el usuario quiere desactivar Corridor Follower, GENERA UN NODO QUE UNICAMENTE HAGA ESTO:
-        "say": "No estaba siguiendo la pared/pasillo."
-      * Si follower_state = 'started' y el usuario quiere activar Corridor Follower, GENERA UN NODO QUE UNICAMENTE HAGA ESTO:
-        "say": "Primero debes desactivar el modo Follow Me para poder usar Corridor Follower."
-      * Jamas uses start_corridor_follower() si corridor_follower_state = 'started'.
-      * Jamas uses stop_corridor_follower() si corridor_follower_state = 'stopped'.
-
-    IMPORTANTE: tanto en el modo Follow Me como en el modo Corridor Follower, si el usuario te pide parar y alguno de estos modos esta activado, debes interpretar que debes desactivar ese modo.
+→ Interacciones previas (ordenadas de más reciente a más antigua):
+{contexto_interacciones}
+→ la interacción más reciente tiene más peso para entender el contexto actual. puede utilizarse para muchas cosas, por ejemplo para volver a la posicion anterior, o simplemente para mantener contexto conversacional.
     
-    === Sensores y tópicos relevantes ===
+Lugares conocidos:
+{lugares_str}
 
-    - /scan: para detectar obstáculos
-    - /odom: para posición y orientación odométrica
-    - /amcl_pose: para posición y orientación en mapa
-    - /cmd_vel_mux/input/navi: para comandos de movimiento
-    - /move_base_simple/goal: para navegación automática
+====================================================
+⚙️ REGLAS DE GENERACIÓN (OBLIGATORIAS)
+====================================================
 
-    === Parámetros operativos ===
+✔ Solo devolver código Python
+✔ Puede incluir comentarios si ayudan
+✔ El código debe terminar SIEMPRE con una línea obligatoria:
 
-    - Velocidad máxima: 0.35 m/s
-    - Distancia mínima segura a obstáculos: 0.75 m
-    - Rango del lidar: -30º a +30º frente al robot. Como el rango es muy limitado, es probable que muchas veces necesites comprobar los datos del lidar mientras vas rotando poco a poco para poder hacer algunas tareas.
+# SUMMARY: <respuesta corta al usuario en lenguaje natural>
 
-    === CAPACIDADES REALES Y LIMITACIONES (PRIORIDAD MÁXIMA) ===
+✔ El SUMMARY debe:
+- Ser una respuesta directa al usuario (como si el robot hablara)
+- Máximo 25 palabras
+- Una sola frase
+- Decir lo que voy a hacer o lo que no puedo hacer
+- No describir razonamiento interno
 
-    Debes razonar siempre con realismo físico. El robot SOLO dispone de:
+✔ Ejemplos:
+# SUMMARY: Vale, voy a acercarme a la pared de delante con cuidado.
+# SUMMARY: No puedo hacer eso directamente, pero puedo ... (explorar alternativas).
+# SUMMARY: De acuerdo, me detengo ahora mismo.
+# SUMMARY: Puedo hacerlo de esta manera ... ¿quieres que lo haga así?
 
-    - Camara y Lidar frontal limitado a -30º a +30º
-    - Distancias frontal / izquierda / derecha derivadas del lidar
-    - Odometría aproximada
-    - Posición en mapa SOLO si existe mapa activo
-    - Funciones explícitamente listadas
-    - Capacidad para responder cualquier pregunta acerca del robot (estado, sensores, funciones, etc.)
+SIEMPRE incluir:
+- #!/usr/bin/env python3
+- from TurtleBotActions import TurtleBotActions
+- rospy.init_node("generated_node", anonymous=True)
+- tba = TurtleBotActions()
 
-    El robot NO dispone de:
+✔ Usar say() para comunicación relevante
+✔ Código robusto y seguro
+✔ No utilizar funciones nuevas si puedes lograr el objetivo usando funciones ya disponibles de turtlebot_actions o combinaciones de ellas.
 
-    - Visión semántica
-    - Detección de objetos (mesa, silla, puerta, persona concreta, mochila, enchufe, etc.)
-    - Reconocimiento de habitaciones
-    - Comprensión visual del entorno
-    - Mapa si no se indica explícitamente
-    - Capacidad de saber qué hay fuera del rango del lidar
-    - Capacidad de confirmar que “ha encontrado” objetos no sensados explícitamente
+====================================================
+🚫 LIMITACIONES DEL ROBOT (CRÍTICO)
+====================================================
 
-    IMPORTANTE:
-    Nunca asumas la existencia, posición o identidad de objetos del entorno.
+El robot SOLO dispone de:
+- Lidar frontal (-30º a +30º). Por ejemplo, si el usuario quiere acercarse a la parede de atras, primero debe girar 180 grados para usar el lidar frontal.
+- Odometría
+- Posición en mapa (si existe)
+- Funciones explícitas
 
-    Si el usuario pide acciones como:
-    - "busca una mesa"
-    - "métete debajo"
-    - "ve donde está Juan"
+El robot NO dispone de:
+- Visión semántica
+- Detección de objetos
+- Reconocimiento de personas o lugares visuales
+- Conocimiento global del entorno
 
-    Debes considerar que NO es posible salvo que exista una función explícita o un lugar guardado que lo permita.
+❌ PROHIBIDO:
+- Inventar objetos (mesas, personas, etc.)
+- Asumir información no sensada
 
-    Si no hay percepción suficiente:
-    1. No improvises
-    2. No inventes estrategias
-    3. No explores a ciegas salvo que el usuario lo pida explícitamente
-    4. Explica brevemente la limitación con say()
-    5. Genera un nodo seguro que no se mueva
+Si algo no es posible:
+→ say("No puedo hacer eso porque ...")
+→ intentar ofrecer alternativa viable si se puede
 
-    === Petición del usuario ===
-    "{user_input}"
+====================================================
+🧭 FUNCIONES DISPONIBLES
+====================================================
+
+- stop()
+- get_odom_position()
+- compute_distance(x0, y0, x1, y1)
+- move_forward(distance, speed=0.2, obstacle_threshold=0.75)
+- move_backward(distance, speed=0.2)
+- rotate(angle_deg, speed=0.5)
+- get_front_distance()
+- get_left_distance()
+- get_right_distance()
+- is_obstacle_ahead(threshold=0.75)
+- say(text)
+- approach_nearest_obstacle() # se acerca al obstáculo más cercano detectado por el lidar frontal.
+
+====================================================
+🗺️ FUNCIONES DE MAPA (solo si existe mapa activo)
+====================================================
+
+- get_map_position()
+- add_place(lugar)
+- delete_place(lugar)
+- go_to_place(place_name)
+- go_to_coordinates(x, y, yaw)
+- go_through_door(offset=0.6)
+
+Si no hay mapa:
+→ informar con say()
+
+====================================================
+⚠️ MODOS AUTÓNOMOS (REGLAS CRÍTICAS)
+====================================================
+
+Solo puede haber UN modo activo a la vez.
+
+Estado actual:
+- follower_state = {follower_state}
+- wall_follower_state = {wall_follower_state}
+
+IMPORTANTE:
+❌ Estos variables NO existen en el nodo generado.
+✔ Debes confiar en su valor y actuar en base a ellas.
+
+----------------------------------------------------
+👤 FOLLOW ME MODE
+----------------------------------------------------
+
+Funciones:
+- follow_me()
+- stop_follow_me()
+
+REGLAS:
+
+SI follower_state == "started" Y usuario quiere activar:
+→ say("Ya estaba en modo Follow Me.")
+
+SI follower_state == "stopped" Y usuario quiere desactivar:
+→ say("No estaba siguiéndote.")
+
+SI wall_follower_state == "started" Y usuario quiere activar:
+→ say("Primero debes desactivar Wall Follower.")
+
+PROHIBIDO:
+- follow_me() si ya está started
+- stop_follow_me() si ya está stopped
+
+----------------------------------------------------
+🧱 WALL FOLLOWER MODE
+----------------------------------------------------
+
+Funciones:
+- start_wall_follower()
+- stop_wall_follower()
+
+REGLAS:
+
+SI wall_follower_state == "started" Y usuario quiere activar:
+→ say("Ya estaba siguiendo la pared.")
+
+SI wall_follower_state == "stopped" Y usuario quiere desactivar:
+→ say("No estaba siguiendo la pared.")
+
+SI follower_state == "started" Y usuario quiere activar:
+→ say("Primero debes desactivar Follow Me.")
+
+PROHIBIDO:
+- start_wall_follower() si ya está started
+- stop_wall_follower() si ya está stopped
+
+====================================================
+🛑 REGLA GLOBAL
+====================================================
+
+Si el usuario dice "parar":
+→ detener el modo activo si existe.
+→ si no existe ningun modo activo, simplemente hacer stop().
+
+====================================================
+📡 SENSORES DISPONIBLES
+====================================================
+
+- /scan
+- /odom
+- /amcl_pose
+
+====================================================
+⚙️ PARÁMETROS
+====================================================
+
+- Velocidad máxima: 0.35 m/s
+- Distancia segura: 0.75 m
+
+====================================================
+🧠 ESTRATEGIA INTELIGENTE
+====================================================
+
+Debes:
+✔ Inferir la intención real del usuario
+✔ Dividir tareas complejas en pasos simples
+✔ Usar sensores para validar acciones
+✔ Elegir la solución más segura
+✔ No asumir información no disponible
+
+====================================================
+📝 PETICIÓN DEL USUARIO
+====================================================
+
+"{user_input}"
     """
 
 #### FUNCION PARA CONSULTAR A CHATGPT ####
@@ -247,9 +333,9 @@ class ChatGPTNode:
     def query_chatgpt(self, prompt):
         try:
             response = self.client.chat.completions.create(
-                model="gpt-5.4-mini",
+                model="gpt-5.4",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.1
+                temperature=0.2
             )
             return response.choices[0].message.content
         except OpenAIError as e:
@@ -307,6 +393,17 @@ class ChatGPTNode:
         except Exception as e:
             rospy.logwarn(f"No se pudo cerrar terminales con título '{title}': {e}")
 
+    # FUNCION QUE RESUME LA RESPUESTA DEL CHATGPT PARA GUARDARLA EN LA BD
+
+    def extract_summary(self, code: str):
+        try:
+            for line in code.splitlines():
+                if "# SUMMARY:" in line:
+                    return line.split("# SUMMARY:", 1)[1].strip()
+            return "sin resumen"
+        except:
+            return "sin resumen"
+
 #### FUNCION PARA GUARDAR POSICIONES EN LA BASE DE DATOS ####
 
     def serialize_pose(self):
@@ -319,13 +416,19 @@ class ChatGPTNode:
     def handle_user_input(self, msg):
         user_input = msg.data
         rospy.loginfo(f"{YELLOW}Petición recibida: {user_input}{RESET}")
-        rospy.loginfo(f"{YELLOW}estado follow me / corridor follower: {self.follower_state} / {self.corridor_follower_state}{RESET}")
-        prompt = self.build_prompt(user_input, self.follower_state, self.corridor_follower_state)
+        rospy.loginfo(f"{YELLOW}estado follow me / wall follower: {self.follower_state} / {self.wall_follower_state}{RESET}")
+        prompt = self.build_prompt(user_input, self.follower_state, self.wall_follower_state)
         gpt_code = self.query_chatgpt(prompt)
 
         if gpt_code:
+            summary = self.extract_summary(gpt_code)
+
             if self.save_code(gpt_code):
-                self.db.insert_user_request(user_input, gpt_code, self.serialize_pose())
+                self.db.insert_user_request(
+                    user_input,
+                    summary,
+                    self.serialize_pose()
+                )
                 self.run_generated_node()
 
 

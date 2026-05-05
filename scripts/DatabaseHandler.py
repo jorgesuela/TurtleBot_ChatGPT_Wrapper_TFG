@@ -14,6 +14,7 @@ class DatabaseHandler:
         # Crear las tablas si no existen al inicializar
         self.create_coordinates_table()
         self.create_user_requests_table()
+        self.create_doors_table()
 
     def create_connection(self):
         # Crear una nueva conexión para cada hilo
@@ -38,15 +39,37 @@ class DatabaseHandler:
         with self.lock:
             conn = self.create_connection()
             cursor = conn.cursor()
+
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_requests (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_input TEXT,
-                    gpt_response TEXT,
+                    summary TEXT,
                     pose_json TEXT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+
+            conn.commit()
+            conn.close()
+
+    def create_doors_table(self):
+        with self.lock:
+            conn = self.create_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS doors (
+                    id TEXT PRIMARY KEY,
+                    x REAL,
+                    y REAL,
+                    nx REAL,
+                    ny REAL,
+                    room_a TEXT,
+                    room_b TEXT
+                )
+            ''')
+
             conn.commit()
             conn.close()
 
@@ -64,7 +87,7 @@ class DatabaseHandler:
             conn.close()
 
     # solo se guardan las ultimas 10 interacciones
-    def insert_user_request(self, user_input, gpt_response, pose=None):
+    def insert_user_request(self, user_input, summary, pose=None):
         with self.lock:
             conn = self.create_connection()
             cursor = conn.cursor()
@@ -73,9 +96,9 @@ class DatabaseHandler:
 
             # Insertar la nueva interacción con la pose
             cursor.execute('''
-                INSERT INTO user_requests (user_input, gpt_response, pose_json)
+                INSERT INTO user_requests (user_input, summary, pose_json)
                 VALUES (?, ?, ?)
-            ''', (user_input, gpt_response, pose_json))
+            ''', (user_input, summary, pose_json))
 
             # Borrar las entradas más antiguas si hay más de 10
             cursor.execute('''
@@ -86,6 +109,30 @@ class DatabaseHandler:
                     LIMIT 10
                 )
             ''')
+
+            conn.commit()
+            conn.close()
+
+    def insert_door(self, door_id, x, y, nx, ny, room_a=None, room_b=None):
+        """
+        Guarda una puerta.
+
+        id      -> nombre puerta
+        x,y     -> centro puerta
+        nx,ny   -> vector normal unitario
+        room_a  -> lado A opcional
+        room_b  -> lado B opcional
+        """
+
+        with self.lock:
+            conn = self.create_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                INSERT OR REPLACE INTO doors
+                (id, x, y, nx, ny, room_a, room_b)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (door_id, x, y, nx, ny, room_a, room_b))
 
             conn.commit()
             conn.close()
@@ -105,6 +152,23 @@ class DatabaseHandler:
             deleted = cursor.rowcount > 0  # True si alguna fila fue eliminada
             conn.commit()
             conn.close()
+            return deleted
+
+    def delete_door(self, door_id):
+        with self.lock:
+            conn = self.create_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(
+                'DELETE FROM doors WHERE id=?',
+                (door_id,)
+            )
+
+            deleted = cursor.rowcount > 0
+
+            conn.commit()
+            conn.close()
+
             return deleted
 
 #### OPERACIONES DE CONSULTA ####
@@ -133,10 +197,43 @@ class DatabaseHandler:
         with self.lock:
             conn = self.create_connection()
             cursor = conn.cursor()
+
             cursor.execute('''
-                SELECT user_input, pose_json FROM user_requests
-                ORDER BY timestamp DESC LIMIT ?
+                SELECT user_input, summary, pose_json
+                FROM user_requests
+                ORDER BY timestamp DESC
+                LIMIT ?
             ''', (n,))
+
             result = cursor.fetchall()
             conn.close()
             return result
+
+    def get_door(self, door_id):
+        with self.lock:
+            conn = self.create_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT x, y, nx, ny, room_a, room_b
+                FROM doors
+                WHERE id=?
+            ''', (door_id,))
+
+            result = cursor.fetchone()
+
+            conn.close()
+            return result
+        
+    def get_all_doors(self):
+        with self.lock:
+            conn = self.create_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('SELECT id FROM doors')
+
+            result = cursor.fetchall()
+
+            conn.close()
+
+            return [r[0] for r in result]

@@ -584,15 +584,118 @@ class TurtleBotActions:
         self.follower_state_pub.publish("stopped")
         rospy.loginfo("'Follow Me' detenido.")
 
-    def start_corridor_follower(self):
+    def start_wall_follower(self):
         rospy.loginfo("Activando Wall Follower...")
         self.wall_follower_enable_pub.publish(True)
         self.wall_follower_state_pub.publish("started")
 
-    def stop_corridor_follower(self):
+    def stop_wall_follower(self):
         rospy.loginfo("Deteniendo Wall Follower...")
         self.wall_follower_enable_pub.publish(False)
         self.stop()
         self.wall_follower_state_pub.publish("stopped")
 
+#### FUNCIONES PARA LAS PUERTAS ####
 
+    def compute_door_target(self, door_id, offset):
+        door = self.db.get_door(door_id)
+
+        if door is None:
+            rospy.logwarn(f"Puerta '{door_id}' no encontrada.")
+            return None
+
+        door_x, door_y, nx, ny, _, _ = door
+
+        # normalizar vector normal
+        norm = math.sqrt(nx*nx + ny*ny)
+        if norm == 0:
+            return None
+        nx /= norm
+        ny /= norm
+
+        pos = self.get_map_position()
+        if pos is None:
+            return None
+
+        rx, ry, _ = pos
+
+        vx = rx - door_x
+        vy = ry - door_y
+
+        dot = vx * nx + vy * ny
+
+        if dot >= 0:
+            target_x = door_x - nx * offset
+            target_y = door_y - ny * offset
+            cross_dx = -nx
+            cross_dy = -ny
+        else:
+            target_x = door_x + nx * offset
+            target_y = door_y + ny * offset
+            cross_dx = nx
+            cross_dy = ny
+
+        target_yaw = math.atan2(cross_dy, cross_dx)
+
+        return (target_x, target_y, target_yaw)
+
+    def get_nearest_door(self):
+        """
+        Devuelve el door_id de la puerta más cercana al robot.
+        """
+
+        doors = self.db.get_all_doors()
+
+        if not doors:
+            rospy.logwarn("No hay puertas en la base de datos.")
+            return None
+
+        pos = self.get_map_position()
+
+        if pos is None:
+            rospy.logwarn("Sin pose AMCL.")
+            return None
+
+        rx, ry, _ = pos
+
+        nearest_door = None
+        min_dist = float("inf")
+
+        for door_id in doors:
+            door = self.db.get_door(door_id)
+
+            if door is None:
+                continue
+
+            x, y, _, _, _, _ = door
+
+            dist = (rx - x)**2 + (ry - y)**2
+
+            if dist < min_dist:
+                min_dist = dist
+                nearest_door = door_id
+
+        return nearest_door
+    
+    def go_through_door(self, offset=0.6):
+        """
+        Cruza la puerta más cercana.
+        """
+
+        door_id = self.get_nearest_door()
+
+        if door_id is None:
+            self.say("No hay puerta válida para cruzar.")
+            return False
+
+        target = self.compute_door_target(door_id, offset)
+
+        if target is None:
+            return False
+
+        x, y, yaw = target
+
+        self.go_to_coordinates(x, y, yaw)
+
+        return True
+    

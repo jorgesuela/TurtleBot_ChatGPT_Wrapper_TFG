@@ -1,13 +1,21 @@
+#!/usr/bin/env python3
 from TurtleBotActions import TurtleBotActions
 import rospy
 
+rospy.init_node("generated_node", anonymous=True)
+tba = TurtleBotActions()
 
-def main():
-    robot = TurtleBotActions()
-    robot.say("No los lanzo al mismo tiempo porque compruebo el estado de ambos modos antes de actuar y aplico una exclusión mutua: si uno está activo, no activo el otro.")
-    robot.stop()
+try:
+    tba.say("Vale, voy a darme la vuelta.")
+    tba.stop()
+    rospy.sleep(0.5)
+    tba.rotate(180, speed=0.5)
+    tba.stop()
+except Exception as e:
+    try:
+        tba.stop()
+        tba.say("No he podido completar el giro de forma segura.")
+    except Exception:
+        pass
 
-
-if __name__ == "__main__":
-    rospy.init_node("turtlebot_safe_response_node", anonymous=True)
-    main()
+# SUMMARY: Vale, voy a darme la vuelta.
