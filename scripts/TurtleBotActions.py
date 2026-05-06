@@ -145,7 +145,7 @@ class TurtleBotActions:
     def compute_distance(self, x0, y0, x1, y1):
         return math.sqrt((x1 - x0)**2 + (y1 - y0)**2)
 
-    def move_forward(self, distance, speed=0.2, obstacle_threshold=0.7):
+    def move_forward(self, distance, speed=0.2, obstacle_threshold=0.6):
         if speed > 0.35:
             speed = 0.35
         if not self.current_odom_pose:
@@ -298,10 +298,10 @@ class TurtleBotActions:
         left_deg = math.degrees(self.scan_data.angle_max)
         return self.get_scan_angle_distance(left_deg)
 
-    def is_obstacle_ahead(self, threshold=0.7):
+    def is_obstacle_ahead(self, threshold=0.6):
         return self.get_front_distance() < threshold
     
-    def approach_nearest_obstacle(self, safe_distance=0.75):
+    def approach_nearest_obstacle(self, safe_distance=0.6):
         """
         Busca el obstáculo más cercano, se orienta hacia él,
         lo centra finamente y se aproxima hasta una distancia segura.

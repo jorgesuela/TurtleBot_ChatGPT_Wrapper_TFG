@@ -151,10 +151,11 @@ Lugares conocidos:
 
 ✔ El SUMMARY debe:
 - Ser una respuesta directa al usuario (como si el robot hablara)
-- Máximo 25 palabras
+- Máximo 30 palabras
 - Una sola frase
 - Decir lo que voy a hacer o lo que no puedo hacer
 - No describir razonamiento interno
+- Siempre que ofrezcas alternativas al usuario, debe estar presente en el SUMMARY para que no pierdas contexto en la siguiente petición.
 
 ✔ Ejemplos:
 # SUMMARY: Vale, voy a acercarme a la pared de delante con cuidado.
@@ -168,7 +169,7 @@ SIEMPRE incluir:
 - rospy.init_node("generated_node", anonymous=True)
 - tba = TurtleBotActions()
 
-✔ Usar say() para comunicación relevante
+✔ Usar say() para comunicación relevante, como comunicar brevemente lo que vas a hacer, y también para comunicar cuando termines la acción, ya sea por fracaso o por éxito.
 ✔ Código robusto y seguro
 ✔ No utilizar funciones nuevas si puedes lograr el objetivo usando funciones ya disponibles de turtlebot_actions o combinaciones de ellas.
 
@@ -203,13 +204,13 @@ Si algo no es posible:
 - stop()
 - get_odom_position()
 - compute_distance(x0, y0, x1, y1)
-- move_forward(distance, speed=0.2, obstacle_threshold=0.75)
+- move_forward(distance, speed=0.2, obstacle_threshold=0.6)
 - move_backward(distance, speed=0.2)
 - rotate(angle_deg, speed=0.5)
 - get_front_distance()
 - get_left_distance()
 - get_right_distance()
-- is_obstacle_ahead(threshold=0.75)
+- is_obstacle_ahead(threshold=0.6)
 - say(text)
 - approach_nearest_obstacle() # se acerca al obstáculo más cercano detectado por el lidar frontal.
 
@@ -308,7 +309,7 @@ Si el usuario dice "parar":
 ====================================================
 
 - Velocidad máxima: 0.35 m/s
-- Distancia segura: 0.75 m
+- Distancia segura: 0.6 m
 
 ====================================================
 🧠 ESTRATEGIA INTELIGENTE
