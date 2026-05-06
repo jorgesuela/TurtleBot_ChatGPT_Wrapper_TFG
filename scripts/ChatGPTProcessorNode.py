@@ -155,7 +155,7 @@ Lugares conocidos:
 - Una sola frase
 - Decir lo que voy a hacer o lo que no puedo hacer
 - No describir razonamiento interno
-- Siempre que ofrezcas alternativas al usuario, debe estar presente en el SUMMARY para que no pierdas contexto en la siguiente petición.
+- Siempre que ofrezcas alternativas al usuario, deben estar presentes en el SUMMARY para que no pierdas contexto en la siguiente petición.
 
 ✔ Ejemplos:
 # SUMMARY: Vale, voy a acercarme a la pared de delante con cuidado.
@@ -239,8 +239,8 @@ Estado actual:
 - wall_follower_state = {wall_follower_state}
 
 IMPORTANTE:
-❌ Estos variables NO existen en el nodo generado.
-✔ Debes confiar en su valor y actuar en base a ellas.
+❌ Prohibido utilizar/comprobar el valor de estas variables en tu nodo generado.
+✔ Debes confiar en estos valores que se te dan por encima de cualquier otra información y actuar como corresponda.
 
 ----------------------------------------------------
 👤 FOLLOW ME MODE

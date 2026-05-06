@@ -41,7 +41,7 @@ class WallFollowerNode:
         rospy.init_node('wall_follower_node')
 
         # Parámetros
-        self.wall_distance = rospy.get_param('~wall_distance', 0.60)
+        self.wall_distance = rospy.get_param('~wall_distance', 0.8)
         self.front_stop_distance = rospy.get_param('~front_stop_distance', 0.50)
         self.front_slow_distance = rospy.get_param('~front_slow_distance', 0.70)
         self.forward_speed = rospy.get_param('~forward_speed', 0.2)
@@ -56,7 +56,7 @@ class WallFollowerNode:
         self.enabled = False
         rospy.Subscriber("/wall_follower/enable", Bool, self.enable_cb)
 
-        self.pid = PIDController(kp=1.5, ki=0.0, kd=0.1, output_limit=self.max_angular_speed)
+        self.pid = PIDController(kp=1.2, ki=0.0, kd=0.08, output_limit=self.max_angular_speed)
         self.prev_time = rospy.Time.now()
 
         rospy.loginfo("Nodo Wall Follower inicializado con auto-selección de pared")
