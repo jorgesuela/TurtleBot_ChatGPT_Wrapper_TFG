@@ -6,19 +6,26 @@ rospy.init_node("generated_node", anonymous=True)
 tba = TurtleBotActions()
 
 def main():
+    # Contexto: la última orden fue "retrocede un poco".
+    # Interpretamos "un poco más" como retroceder un poco más.
+    distance = 0.25
+    speed = 0.12
+
     try:
-        tba.say("Entendido, voy a seguir la pared ahora.")
-        tba.start_wall_follower()
-        rospy.sleep(0.5)
-        tba.say("He activado el seguimiento de pared.")
+        tba.say("Vale, voy a retroceder un poco más.")
+        tba.move_backward(distance, speed=speed)
+        tba.say("He retrocedido un poco más.")
     except Exception:
         try:
             tba.stop()
-            tba.say("No he podido activar el seguimiento de pared.")
+        except Exception:
+            pass
+        try:
+            tba.say("No he podido retroceder, me detengo.")
         except Exception:
             pass
 
 if __name__ == "__main__":
     main()
 
-# SUMMARY: Entendido, voy a seguir la pared ahora.
+# SUMMARY: Vale, voy a retroceder un poco más.

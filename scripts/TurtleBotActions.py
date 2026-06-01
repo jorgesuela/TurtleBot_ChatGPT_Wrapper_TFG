@@ -19,9 +19,11 @@ from DatabaseHandler import DatabaseHandler
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import Bool
+import actionlib
+from move_base_msgs.msg import MoveBaseAction
 
 # necesario para el ssh automatico. el nodo follower debe estar corriendo en el robot
-ROBOT_IP   = "10.231.182.172" # ← AQUI HAY QUE PONER LA IP DEL ROBOT, CUIDADO QUE CAMBIA
+ROBOT_IP   = "10.204.158.172" # ← AQUI HAY QUE PONER LA IP DEL ROBOT, CUIDADO QUE CAMBIA
 ROBOT_USER = "turtlebot"  # ← usuario del robot
 PASSWORD   = "ros"        # ← contraseña del robot
 
@@ -40,8 +42,12 @@ class TurtleBotActions:
             "database_2": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_2.db", # ESTA DB ES DEL MAPA XXXX
             "database_3": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_3.db", # ESTA DB ES DEL MAPA XXXX
         }
-        self.current_database = "database_1" # Seleccionar la base de datos activa (segun el mapa que este cargado)
+        self.current_database = "database_2" # Seleccionar la base de datos activa (segun el mapa que este cargado)
         self.db = DatabaseHandler(self.db_paths[self.current_database])
+
+        # navegacion autonoma con move_base
+        self.move_base_client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
+        self.move_base_client.wait_for_server()
 
         #SUSCRIPTORES
         rospy.Subscriber('/scan', LaserScan, self.update_scan)
@@ -98,6 +104,8 @@ class TurtleBotActions:
         self.current_odom_pose = msg.pose.pose
 
     def stop(self):
+        self.move_base_client.cancel_all_goals()
+
         twist = Twist()
         self.cmd_vel_pub.publish(twist)
 
@@ -488,13 +496,6 @@ class TurtleBotActions:
         timeout = rospy.Time.now() + rospy.Duration(120)  # 2 minutos máx
         rate = rospy.Rate(1)
         while not rospy.is_shutdown() and rospy.Time.now() < timeout:
-            if self.has_arrived(x, y):
-                rospy.loginfo("¡El robot ha llegado a la meta!")
-                if destination_name:
-                    self.speaker.say(f"he llegado al destino {destination_name} con éxito.")
-                else:
-                    self.speaker.say("he llegado al punto indicado.")
-                return
             rate.sleep()
 
         rospy.logwarn("El robot no llegó a la meta dentro del tiempo esperado.")
@@ -553,7 +554,6 @@ class TurtleBotActions:
         if self._running_remote():
             self.follower_state_pub.publish("started")
             rospy.loginfo("'Follow Me' activo.")
-            self.speaker.say("Modo seguimiento activado. Ya puedes caminar.")
         else:
             rospy.logerr("El follower no arrancó. Cerrando ventana.")
             self.speaker.say("No se pudo activar 'Follow Me'. Verifica que el robot está listo.")

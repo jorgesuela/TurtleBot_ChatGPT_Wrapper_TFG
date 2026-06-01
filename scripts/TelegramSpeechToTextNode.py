@@ -39,7 +39,7 @@ class TelegramSpeechToTextNode:
             "database_3": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_3.db",
         }
 
-        self.current_database = "database_1"
+        self.current_database = "database_2"
         self.db = DatabaseHandler(self.db_paths[self.current_database])
 
         self.pose = None

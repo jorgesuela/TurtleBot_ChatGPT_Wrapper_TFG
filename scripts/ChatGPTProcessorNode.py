@@ -28,7 +28,7 @@ class ChatGPTNode:
             "database_3": "/home/jorge/catkin_ws/src/cisc_turtlebot_chatgpt_wrapper/database/turtlebot_database_3.db",
         }
         # Seleccionar la base de datos activa (segun el mapa que este cargado)
-        self.current_database = "database_1"
+        self.current_database = "database_2"
         self.db = DatabaseHandler(self.db_paths[self.current_database])
 
         # Estado del follower
@@ -69,6 +69,7 @@ class ChatGPTNode:
     def update_pose(self, msg):
         pos = msg.pose.pose.position
         ori = msg.pose.pose.orientation
+
         q = [ori.x, ori.y, ori.z, ori.w]
         _, _, yaw = tf.transformations.euler_from_quaternion(q)
 
@@ -134,7 +135,7 @@ Debes:
 
 → Interacciones previas (ordenadas de más reciente a más antigua):
 {contexto_interacciones}
-→ la interacción más reciente tiene más peso para entender el contexto actual. puede utilizarse para muchas cosas, por ejemplo para volver a la posicion anterior, o simplemente para mantener contexto conversacional.
+→ la interacción más reciente tiene más peso para entender el contexto actual. puede utilizarse para muchas cosas, por ejemplo para volver a la posicion anterior usando el pose del robot en esa accion pasada, o simplemente para mantener contexto conversacional.
     
 Lugares conocidos:
 {lugares_str}
@@ -195,7 +196,7 @@ El robot NO dispone de:
 
 Si algo no es posible:
 → say("No puedo hacer eso porque ...")
-→ intentar ofrecer alternativa viable si se puede
+→ intentar ofrecer siempre una alternativa viable si se puede
 
 ====================================================
 🧭 FUNCIONES DISPONIBLES

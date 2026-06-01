@@ -44,7 +44,7 @@ class WallFollowerNode:
         self.wall_distance = rospy.get_param('~wall_distance', 0.8)
         self.front_stop_distance = rospy.get_param('~front_stop_distance', 0.50)
         self.front_slow_distance = rospy.get_param('~front_slow_distance', 0.70)
-        self.forward_speed = rospy.get_param('~forward_speed', 0.2)
+        self.forward_speed = rospy.get_param('~forward_speed', 0.25)
         self.max_angular_speed = rospy.get_param('~max_angular_speed', 0.5)
         self.tolerance = rospy.get_param('~tolerance', 0.04)
 
