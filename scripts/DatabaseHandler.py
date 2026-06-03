@@ -184,14 +184,17 @@ class DatabaseHandler:
             conn.close()
             return result  # Retorna (x, y, yaw) o None
     
-    def get_all_places(self):
+    def get_all_places_with_pose(self):
         with self.lock:
             conn = self.create_connection()
             cursor = conn.cursor()
-            cursor.execute('SELECT name FROM places')
-            places = cursor.fetchall()
+
+            cursor.execute('SELECT name, x, y, yaw FROM places')
+            rows = cursor.fetchall()
+
             conn.close()
-            return [place[0] for place in places]  # Devuelve una lista con los nombres de los lugares
+
+            return rows
         
     def get_last_n_user_requests(self, n=3):
         with self.lock:

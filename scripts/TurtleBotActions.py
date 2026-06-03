@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 
-# FALLOS
-# buscar la forma de que la ip no cambie, o que se actualice sola
-# se le ha pedido que se acerque a la otra pared y no entendio que se referia a la pared de atras
-# vuelve a donde estabas no funciona
 import shlex, subprocess, os, signal, time
 from std_msgs import msg
 from std_msgs.msg import String
@@ -23,7 +19,7 @@ import actionlib
 from move_base_msgs.msg import MoveBaseAction
 
 # necesario para el ssh automatico. el nodo follower debe estar corriendo en el robot
-ROBOT_IP   = "10.204.158.172" # ← AQUI HAY QUE PONER LA IP DEL ROBOT, CUIDADO QUE CAMBIA
+ROBOT_IP   = "10.73.93.172" # ← AQUI HAY QUE PONER LA IP DEL ROBOT, CUIDADO QUE CAMBIA
 ROBOT_USER = "turtlebot"  # ← usuario del robot
 PASSWORD   = "ros"        # ← contraseña del robot
 
