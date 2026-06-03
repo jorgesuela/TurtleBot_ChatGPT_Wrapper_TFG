@@ -107,9 +107,9 @@ class ChatGPTNode:
 
         if stored_places:
             lugares_str = "\n".join(
-                f"- {name}: x={x}, y={y}"
-                for name, x, y, yaw in stored_places
-            )
+            f"- {name}: x={x}, y={y}, yaw={yaw}"
+            for name, x, y, yaw in stored_places
+        )
         else:
             lugares_str = "ninguno"
 
@@ -151,7 +151,7 @@ Debes:
 → la interacción más reciente tiene más peso para entender el contexto actual. puede utilizarse para muchas cosas, por ejemplo para volver a la posicion anterior, o simplemente para mantener contexto conversacional.
 → Si el usuario te pide revertir un movimiento / volver a donde estaba antes, debes mirar la ultima interaccion previa que implico movimiento del robot, y usar esa pose para volver a ella.
 
-Lugares conocidos:
+Lugares conocidos (las coordenadas son unicamente para que las uses para calcular distancias y elegir el lugar más cercano si hay varias opciones posibles, no las uses nunca para ir al lugar directamente, siempre debes usar go_to_place(lugar) para ir a un lugar guardado):
 {lugares_str}
 
 Posición actual del robot:

@@ -462,11 +462,11 @@ class TurtleBotActions:
     def go_to_place(self, place_name):
         place = self.db.get_place(place_name)
         if place is None:
-            rospy.logwarn(f"Lugar '{place_name}' no encontrado en la base de datos.")
-            return
+            rospy.logwarn(...)
+            return False
 
         x, y, yaw = place
-        self._go_to_target(x, y, yaw, destination_name=place_name)
+        return self._go_to_target(x, y, yaw, destination_name=place_name)
 
     def go_to_coordinates(self, x, y, yaw=0.0):
         self._go_to_target(x, y, yaw)
@@ -475,26 +475,31 @@ class TurtleBotActions:
         rospy.loginfo(f"Enviando al robot hacia ({x}, {y}, yaw={yaw})...")
 
         from tf.transformations import quaternion_from_euler
+        from move_base_msgs.msg import MoveBaseGoal
         from geometry_msgs.msg import Quaternion
 
         quat = quaternion_from_euler(0, 0, yaw)
-        goal_msg = PoseStamped()
-        goal_msg.header.stamp = rospy.Time.now()
-        goal_msg.header.frame_id = "map"
-        goal_msg.pose.position.x = x
-        goal_msg.pose.position.y = y
-        goal_msg.pose.orientation = Quaternion(*quat)
 
-        self.goal_pub.publish(goal_msg)
-        rospy.loginfo("Objetivo publicado en /move_base_simple/goal.")
+        goal = MoveBaseGoal()
+        goal.target_pose.header.frame_id = "map"
+        goal.target_pose.header.stamp = rospy.Time.now()
 
-        # Esperar hasta que llegue o se agote el tiempo
-        timeout = rospy.Time.now() + rospy.Duration(120)  # 2 minutos máx
-        rate = rospy.Rate(1)
-        while not rospy.is_shutdown() and rospy.Time.now() < timeout:
-            rate.sleep()
+        goal.target_pose.pose.position.x = x
+        goal.target_pose.pose.position.y = y
+        goal.target_pose.pose.orientation = Quaternion(*quat)
 
-        rospy.logwarn("El robot no llegó a la meta dentro del tiempo esperado.")
+        self.move_base_client.send_goal(goal)
+
+        self.move_base_client.wait_for_result(rospy.Duration(120))
+
+        state = self.move_base_client.get_state()
+
+        if state == 3:  # SUCCEEDED
+            rospy.loginfo("Llegada confirmada por move_base.")
+            return True
+        else:
+            rospy.logwarn("move_base no alcanzó el objetivo.")
+            return False
 
 #### FOLLOWERS AUTOMATIZADOS: PENDIENTES DE REVISION!!!! ####
 
