@@ -45,7 +45,7 @@ class TelegramSpeechToTextNode:
         self.pose = None
         self.follow_me_state = "stopped"
         self.wall_follower_state = "stopped"
-        self.stop_commands = {"para", "parate", "párate", "parate ahi", "párate ahí", "detente", "quieto", "quedate ahi", "quédate ahí", "parate ya", "párate ya", "quedate quieto", "quédate quieto", "vale para", "vale parate ahi", "vale párate ahí"}
+        self.stop_commands = {"para", "parar", "parate", "párate", "parate ahi", "párate ahí", "detente", "quieto", "quedate ahi", "quédate ahí", "parate ya", "párate ya", "quedate quieto", "quédate quieto", "vale para", "vale parate ahi", "vale párate ahí"}
         self.tba = TurtleBotActions()
 
         self.pub = rospy.Publisher('/speech_to_text', String, queue_size=10)
