@@ -1,3 +1,11 @@
+## Autor
+
+**Jorge Suela Martín**
+
+Proyecto académico de Ingeniería Informática — Universidad Rey Juan Carlos.
+
+---
+
 # TurtleBot ChatGPT Wrapper
 
 ![ROS](https://img.shields.io/badge/ROS-Noetic-22314E?logo=ros)
@@ -529,7 +537,7 @@ Su objetivo es estudiar la integración de modelos de lenguaje en sistemas robó
 
 ## Autor
 
-**Jorge Suela**
+**Jorge Suela Martín**
 
 Proyecto académico de Ingeniería Informática — Universidad Rey Juan Carlos.
 
